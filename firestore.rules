@@ -1,0 +1,304 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Deny all reads and writes by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == 'voltaraintelligentechnologies@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUser(data, uid) {
+      return data.keys().hasAll(['uid', 'role', 'name', 'email', 'status'])
+        && data.keys().hasOnly(['uid', 'role', 'name', 'email', 'mobile', 'status', 'createdAt', 'updatedAt', 'createdBy'])
+        && data.uid == uid
+        && data.role in ['b2c', 'b2b', 'executive', 'admin']
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 160
+        && data.email is string && data.email.size() > 3 && data.email.size() <= 200
+        && data.status in ['active', 'deactivated'];
+    }
+
+    function isValidPickupOrder(data) {
+      return data.keys().hasAll(['orderNumber', 'customerUserId', 'customerRole', 'status', 'city', 'pinCode'])
+        && data.keys().hasOnly([
+          'id', 'orderNumber', 'customerUserId', 'customerName', 'customerMobile', 'customerRole',
+          'branchId', 'branchName', 'addressText', 'city', 'pinCode', 'zoneId', 'lat', 'lng',
+          'scheduledDate', 'timeSlot', 'instructions', 'status', 'items', 'photos',
+          'estimatedTotalWeight', 'estimatedTotalAmount', 'actualTotalWeight', 'finalAmount',
+          'assignedExecutiveId', 'assignedExecutiveName', 'pickupOtp', 'paymentId', 'quotationId',
+          'isRecurring', 'recurringFrequency', 'cancellationReason', 'createdAt', 'updatedAt',
+          'createdBy', 'timeline'
+        ])
+        && data.orderNumber is string && data.orderNumber.size() > 0 && data.orderNumber.size() <= 64
+        && data.customerUserId is string && data.customerUserId.size() > 0 && data.customerUserId.size() <= 128
+        && data.customerRole in ['b2c', 'b2b']
+        && data.city is string && data.city.size() <= 80
+        && data.pinCode is string && data.pinCode.size() <= 12
+        && data.status in [
+          'booking_created', 'confirmed', 'executive_assigned', 'on_the_way',
+          'reached_location', 'scrap_collected', 'weight_verified', 'payment_completed', 'cancelled'
+        ];
+    }
+
+    function isValidQuotation(data) {
+      return data.keys().hasAll(['quoteNumber', 'businessUserId', 'status'])
+        && data.keys().hasOnly([
+          'id', 'quoteNumber', 'businessUserId', 'businessName', 'branchId', 'pickupLocation',
+          'city', 'pinCode', 'expectedCollectionDate', 'items', 'photos',
+          'totalEstimatedWeightKg', 'totalQuotedAmount', 'adminNotes', 'revisionNotes',
+          'status', 'convertedOrderId', 'createdAt', 'updatedAt'
+        ])
+        && data.quoteNumber is string && data.quoteNumber.size() <= 64
+        && data.businessUserId is string && data.businessUserId.size() <= 128
+        && data.status in ['submitted', 'priced_by_admin', 'revision_requested', 'accepted', 'rejected', 'converted_to_order'];
+    }
+
+    function isValidSupportTicket(data) {
+      return data.keys().hasAll(['ticketNumber', 'userId', 'subject', 'status'])
+        && data.keys().hasOnly([
+          'id', 'ticketNumber', 'userId', 'userName', 'userRole', 'subject',
+          'category', 'message', 'status', 'adminReply', 'createdAt', 'updatedAt'
+        ])
+        && data.ticketNumber is string && data.ticketNumber.size() <= 64
+        && data.userId is string && data.userId.size() <= 128
+        && data.subject is string && data.subject.size() > 0 && data.subject.size() <= 200
+        && data.status in ['open', 'in_progress', 'resolved'];
+    }
+
+    function isValidEnquiry(data) {
+      return data.keys().hasAll(['name', 'email', 'mobile', 'enquiryType'])
+        && data.keys().hasOnly(['id', 'name', 'email', 'mobile', 'enquiryType', 'message', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 120
+        && data.email is string && data.email.size() > 3 && data.email.size() <= 200
+        && data.mobile is string && data.mobile.size() <= 30
+        && data.enquiryType is string && data.enquiryType.size() <= 60;
+    }
+
+    function isValidFcmToken(data) {
+      return data.keys().hasAll(['userId', 'role', 'token', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'role', 'token', 'platform', 'updatedAt', '_syncedAt'])
+        && data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128
+        && data.role in ['b2c', 'b2b', 'executive', 'admin']
+        && data.token is string && data.token.size() > 0 && data.token.size() <= 512;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['userId', 'channel', 'title', 'message', 'type', 'isRead', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'channel', 'title', 'message', 'type', 'relatedId', 'isRead', 'createdAt', '_syncedAt'])
+        && data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128
+        && data.channel in ['in_app', 'email', 'sms', 'push']
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 200
+        && data.message is string && data.message.size() <= 1000
+        && data.type in ['order', 'payment', 'assignment', 'quotation', 'reminder', 'reward']
+        && data.isRead is bool;
+    }
+
+    // --- Collection Rules ---
+
+    // Bootstrapped connection check doc
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Admins registry
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow list: if isAdmin();
+      allow create, update, delete: if isValidId(adminId) && isAdmin();
+    }
+
+    // Users (PII isolated to owner or admin; prevent self-escalation to admin role)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isVerified() && isValidUser(incoming(), userId)
+        && ((isOwner(userId) && incoming().role in ['b2c', 'b2b', 'executive']) || isAdmin());
+      allow update: if isValidId(userId) && isVerified() && isValidUser(incoming(), userId)
+        && (isAdmin() || (
+          isOwner(userId)
+          && incoming().role == existing().role
+          && incoming().status == existing().status
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'mobile', 'updatedAt'])
+        ));
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // Public catalog & published rates & CMS & service corridors (read-only publicly, admin write)
+    match /scrapCategories/{categoryId} {
+      allow get: if isValidId(categoryId);
+      allow list: if true;
+      allow create, update, delete: if isValidId(categoryId) && isAdmin();
+    }
+
+    match /scrapSubcategories/{subId} {
+      allow get: if isValidId(subId);
+      allow list: if true;
+      allow create, update, delete: if isValidId(subId) && isAdmin();
+    }
+
+    match /scrapRates/{rateId} {
+      allow get: if isValidId(rateId);
+      allow list: if true;
+      allow create, update, delete: if isValidId(rateId) && isAdmin();
+    }
+
+    match /serviceZones/{zoneId} {
+      allow get: if isValidId(zoneId);
+      allow list: if true;
+      allow create, update, delete: if isValidId(zoneId) && isAdmin();
+    }
+
+    match /cms/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if true;
+      allow create, update, delete: if isValidId(docId) && isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow get: if isValidId(reviewId);
+      allow list: if true;
+      allow create: if isValidId(reviewId) && isVerified() && incoming().userId == request.auth.uid;
+      allow update, delete: if isValidId(reviewId) && isAdmin();
+    }
+
+    // Pickup Orders: Owner, Assigned Executive, or Admin
+    match /pickupOrders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (
+        existing().customerUserId == request.auth.uid ||
+        existing().assignedExecutiveId == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.customerUserId == request.auth.uid ||
+        resource.data.assignedExecutiveId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(orderId) && isVerified() && isValidPickupOrder(incoming())
+        && (incoming().customerUserId == request.auth.uid || isAdmin());
+      allow update: if isValidId(orderId) && isVerified() && isValidPickupOrder(incoming())
+        && incoming().customerUserId == existing().customerUserId
+        && (
+          isAdmin()
+          || (existing().customerUserId == request.auth.uid
+              && existing().status in ['booking_created', 'confirmed']
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt', 'timeline']))
+          || (existing().assignedExecutiveId == request.auth.uid
+              && existing().status != 'payment_completed'
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'items', 'actualTotalWeight', 'finalAmount', 'paymentId', 'updatedAt', 'timeline'
+              ]))
+        );
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    // B2B Quotations: Business owner or Admin
+    match /quotations/{quotationId} {
+      allow get: if isValidId(quotationId) && isSignedIn() && (
+        existing().businessUserId == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.businessUserId == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(quotationId) && isVerified() && isValidQuotation(incoming())
+        && (incoming().businessUserId == request.auth.uid || isAdmin());
+      allow update: if isValidId(quotationId) && isVerified() && isValidQuotation(incoming())
+        && incoming().businessUserId == existing().businessUserId
+        && (
+          isAdmin()
+          || (existing().businessUserId == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'revisionNotes', 'convertedOrderId', 'updatedAt']))
+        );
+      allow delete: if isValidId(quotationId) && isAdmin();
+    }
+
+    // Payments: Owner read, Executive/Admin create, Admin update
+    match /payments/{paymentId} {
+      allow get: if isValidId(paymentId) && isSignedIn() && (
+        existing().userId == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(paymentId) && isVerified() && isAdmin();
+      allow update, delete: if isValidId(paymentId) && isAdmin();
+    }
+
+    // Support Tickets: Owner read/create, Admin read/reply
+    match /supportTickets/{ticketId} {
+      allow get: if isValidId(ticketId) && isSignedIn() && (
+        existing().userId == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      allow create: if isValidId(ticketId) && isVerified() && isValidSupportTicket(incoming())
+        && incoming().userId == request.auth.uid;
+      allow update: if isValidId(ticketId) && isVerified() && isValidSupportTicket(incoming()) && isAdmin();
+      allow delete: if isValidId(ticketId) && isAdmin();
+    }
+
+    // Audit Logs: Admin read, verified user append-only for their own actions
+    match /auditLogs/{logId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(logId) && isVerified() && incoming().actorUserId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Public Contact Enquiries: Anyone can submit, only Admin can read
+    match /enquiries/{enquiryId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(enquiryId) && isValidEnquiry(incoming());
+      allow update, delete: if isValidId(enquiryId) && isAdmin();
+    }
+
+    // FCM Push Tokens: Owner or Admin read/write
+    match /fcmTokens/{tokenId} {
+      allow get: if isValidId(tokenId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update: if isValidId(tokenId) && isVerified() && isValidFcmToken(incoming())
+        && (incoming().userId == request.auth.uid || isAdmin());
+      allow delete: if isValidId(tokenId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // Real-time Notifications: Recipient or Admin read, recipient can mark read
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(notificationId) && isVerified() && isValidNotification(incoming());
+      allow update: if isValidId(notificationId) && isSignedIn() && isValidNotification(incoming())
+        && (isAdmin() || (existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['isRead'])));
+      allow delete: if isValidId(notificationId) && isAdmin();
+    }
+  }
+}

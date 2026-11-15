@@ -1,0 +1,6 @@
+{
+  "name": "PUNARCHAKRA — Waste-to-Value & Digital Scrap Platform",
+  "description": "Turning Scrap Into Value. Punarchakra is Bengaluru’s Waste-to-Value (W2V) circular innovation firm transforming household and corporate scrap into profitable, high-demand items.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

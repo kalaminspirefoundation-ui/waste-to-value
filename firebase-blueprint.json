@@ -1,0 +1,227 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Core Punarchakra user identity and RBAC role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["b2c", "b2b", "executive", "admin"] },
+        "name": { "type": "string", "maxLength": 160 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "mobile": { "type": "string", "maxLength": 30 },
+        "status": { "type": "string", "enum": ["active", "deactivated"] },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "role", "name", "email", "status"]
+    },
+    "ScrapCategory": {
+      "title": "ScrapCategory",
+      "description": "Published scrap material category.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 80 },
+        "slug": { "type": "string", "maxLength": 80 },
+        "unit": { "type": "string", "enum": ["kg", "piece"] },
+        "co2FactorPerKg": { "type": "number" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["name", "slug", "unit", "isActive"]
+    },
+    "ScrapRate": {
+      "title": "ScrapRate",
+      "description": "Admin-published city and segment scrap pricing.",
+      "type": "object",
+      "properties": {
+        "categoryId": { "type": "string", "maxLength": 128 },
+        "city": { "type": "string", "maxLength": 80 },
+        "customerType": { "type": "string", "enum": ["b2c", "b2b"] },
+        "ratePerUnit": { "type": "number" },
+        "effectiveFrom": { "type": "string", "maxLength": 32 },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["categoryId", "city", "customerType", "ratePerUnit", "isActive"]
+    },
+    "PickupOrder": {
+      "title": "PickupOrder",
+      "description": "B2C or B2B scrap pickup booking, assignment, weighing, and settlement record.",
+      "type": "object",
+      "properties": {
+        "orderNumber": { "type": "string", "maxLength": 64 },
+        "customerUserId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "maxLength": 160 },
+        "customerRole": { "type": "string", "enum": ["b2c", "b2b"] },
+        "city": { "type": "string", "maxLength": 80 },
+        "pinCode": { "type": "string", "maxLength": 12 },
+        "scheduledDate": { "type": "string", "maxLength": 32 },
+        "status": {
+          "type": "string",
+          "enum": [
+            "booking_created",
+            "confirmed",
+            "executive_assigned",
+            "on_the_way",
+            "reached_location",
+            "scrap_collected",
+            "weight_verified",
+            "payment_completed",
+            "cancelled"
+          ]
+        },
+        "assignedExecutiveId": { "type": "string", "maxLength": 128 },
+        "estimatedTotalAmount": { "type": "number" },
+        "finalAmount": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["orderNumber", "customerUserId", "customerRole", "status"]
+    },
+    "Quotation": {
+      "title": "Quotation",
+      "description": "B2B enterprise bulk scrap quotation request and pricing negotiation.",
+      "type": "object",
+      "properties": {
+        "quoteNumber": { "type": "string", "maxLength": 64 },
+        "businessUserId": { "type": "string", "maxLength": 128 },
+        "businessName": { "type": "string", "maxLength": 160 },
+        "status": {
+          "type": "string",
+          "enum": ["submitted", "priced_by_admin", "revision_requested", "accepted", "rejected", "converted_to_order"]
+        },
+        "totalEstimatedWeightKg": { "type": "number" },
+        "totalQuotedAmount": { "type": "number" }
+      },
+      "required": ["quoteNumber", "businessUserId", "status"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Settlement record for completed scrap pickups.",
+      "type": "object",
+      "properties": {
+        "receiptNumber": { "type": "string", "maxLength": 64 },
+        "orderId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "completed", "refunded", "failed"] }
+      },
+      "required": ["receiptNumber", "orderId", "userId", "amount", "status"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable operational and administrative audit event.",
+      "type": "object",
+      "properties": {
+        "actorUserId": { "type": "string", "maxLength": 128 },
+        "actorRole": { "type": "string", "maxLength": 32 },
+        "action": { "type": "string", "maxLength": 80 },
+        "entityType": { "type": "string", "maxLength": 64 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["actorUserId", "action", "entityType", "entityId"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer or business support request.",
+      "type": "object",
+      "properties": {
+        "ticketNumber": { "type": "string", "maxLength": 64 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "subject": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved"] }
+      },
+      "required": ["ticketNumber", "userId", "subject", "status"]
+    },
+    "ContactEnquiry": {
+      "title": "ContactEnquiry",
+      "description": "Public homepage contact, community initiative, and society drive enquiry.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 120 },
+        "email": { "type": "string", "maxLength": 200 },
+        "mobile": { "type": "string", "maxLength": 30 },
+        "enquiryType": { "type": "string", "maxLength": 60 },
+        "message": { "type": "string", "maxLength": 2000 }
+      },
+      "required": ["name", "email", "mobile", "enquiryType"]
+    },
+    "FcmToken": {
+      "title": "FcmToken",
+      "description": "Registered Firebase Cloud Messaging token for real-time pickup status alerts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["b2c", "b2b", "executive", "admin"] },
+        "token": { "type": "string", "maxLength": 512 },
+        "platform": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "role", "token", "updatedAt"]
+    },
+    "PushNotification": {
+      "title": "PushNotification",
+      "description": "Real-time pickup status push notification record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "channel": { "type": "string", "enum": ["in_app", "email", "sms", "push"] },
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 1000 },
+        "type": { "type": "string", "enum": ["order", "payment", "assignment", "quotation", "reminder", "reward"] },
+        "relatedId": { "type": "string", "maxLength": 128 },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "channel", "title", "message", "type", "isRead", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Registered user accounts keyed by Firebase UID."
+    },
+    "/scrapCategories/{categoryId}": {
+      "schema": { "$ref": "#/entities/ScrapCategory" },
+      "description": "Public scrap category catalog."
+    },
+    "/scrapRates/{rateId}": {
+      "schema": { "$ref": "#/entities/ScrapRate" },
+      "description": "Admin-published live scrap rates."
+    },
+    "/pickupOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/PickupOrder" },
+      "description": "All B2C and B2B pickup orders."
+    },
+    "/quotations/{quotationId}": {
+      "schema": { "$ref": "#/entities/Quotation" },
+      "description": "B2B quotation negotiation documents."
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payment settlement records."
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Customer and B2B support tickets."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Platform audit trail."
+    },
+    "/enquiries/{enquiryId}": {
+      "schema": { "$ref": "#/entities/ContactEnquiry" },
+      "description": "Public homepage and community initiative enquiries."
+    },
+    "/fcmTokens/{tokenId}": {
+      "schema": { "$ref": "#/entities/FcmToken" },
+      "description": "FCM push subscription tokens scoped by authenticated user."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/PushNotification" },
+      "description": "Real-time pickup and payment notifications per recipient."
+    }
+  }
+}

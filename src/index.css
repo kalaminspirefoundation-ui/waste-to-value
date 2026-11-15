@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Plus Jakarta Sans", "Noto Sans Kannada", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", "Noto Sans Kannada", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-forest: #174B37;
+  --color-forest-dark: #103527;
+  --color-emerald-brand: #28A66A;
+  --color-lime-accent: #A5D66D;
+  --color-canvas: #F7F9F6;
+  --color-surface: #FFFFFF;
+  --color-ink: #202820;
+}
+
+@keyframes pnc-indeterminate {
+  0% {
+    transform: translateX(-100%) scaleX(0.35);
+  }
+  50% {
+    transform: translateX(35%) scaleX(0.6);
+  }
+  100% {
+    transform: translateX(120%) scaleX(0.35);
+  }
+}
+
+.animate-pnc-progress {
+  animation: pnc-indeterminate 1.15s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    color: #202820;
+    background-color: #F7F9F6;
+    scroll-behavior: smooth;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom subtle scrollbars for sidebars and data tables */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(23, 75, 55, 0.16);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(23, 75, 55, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* WCAG Accessibility Modes managed by PunarchakraProvider */
+html.pnc-reduce-motion *,
+html.pnc-reduce-motion *::before,
+html.pnc-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html.pnc-sr-enhanced *:focus-visible {
+  outline: 3px solid #D97706 !important;
+  outline-offset: 3px !important;
+}
+
+/* High Contrast WCAG AAA Theme (clean dark-obsidian surface + vivid yellow/lime accents, safe button foregrounds) */
+html.pnc-high-contrast,
+html.pnc-high-contrast body {
+  background-color: #050806 !important;
+  color: #FFFFFF !important;
+}
+
+html.pnc-high-contrast header,
+html.pnc-high-contrast aside,
+html.pnc-high-contrast nav.fixed,
+html.pnc-high-contrast .bg-white,
+html.pnc-high-contrast .bg-white\/95 {
+  background-color: #0C120E !important;
+  color: #FFFFFF !important;
+  border-color: #A5D66D !important;
+}
+
+html.pnc-high-contrast .bg-\[\#F7F9F6\],
+html.pnc-high-contrast .bg-\[\#F7F9F6\]\/60 {
+  background-color: #080C09 !important;
+  color: #FFFFFF !important;
+}
+
+html.pnc-high-contrast .text-\[\#174B37\],
+html.pnc-high-contrast .text-\[\#28A66A\] {
+  color: #FFE600 !important;
+}
+
+html.pnc-high-contrast .text-\[\#202820\],
+html.pnc-high-contrast .text-\[\#202820\]\/80,
+html.pnc-high-contrast .text-\[\#202820\]\/75,
+html.pnc-high-contrast .text-\[\#202820\]\/70,
+html.pnc-high-contrast .text-\[\#202820\]\/65,
+html.pnc-high-contrast .text-\[\#202820\]\/60,
+html.pnc-high-contrast .text-\[\#202820\]\/55 {
+  color: #F3F4F6 !important;
+}
+
+html.pnc-high-contrast .bg-\[\#174B37\],
+html.pnc-high-contrast .bg-\[\#103527\],
+html.pnc-high-contrast .bg-\[\#28A66A\] {
+  background-color: #174B37 !important;
+  color: #FFFFFF !important;
+  border: 2px solid #FFE600 !important;
+}
+
+html.pnc-high-contrast .bg-\[\#174B37\] .text-\[\#174B37\],
+html.pnc-high-contrast .bg-\[\#103527\] .text-\[\#174B37\],
+html.pnc-high-contrast .bg-\[\#174B37\] * {
+  border-color: rgba(255, 230, 0, 0.5);
+}
+
+html.pnc-high-contrast input,
+html.pnc-high-contrast select,
+html.pnc-high-contrast textarea {
+  background-color: #050806 !important;
+  color: #FFFFFF !important;
+  border: 2px solid #A5D66D !important;
+}
+
+html.pnc-high-contrast a,
+html.pnc-high-contrast button:focus-visible,
+html.pnc-high-contrast input:focus-visible,
+html.pnc-high-contrast select:focus-visible {
+  outline: 3px solid #FFE600 !important;
+  outline-offset: 2px !important;
+}
