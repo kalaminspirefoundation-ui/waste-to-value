@@ -12,7 +12,8 @@ dotenv.config();
 
 const clientApp = getApps().find((a) => a.name === 'server-client')
   || initializeApp(firebaseConfig, 'server-client');
-const publicDb = getFirestore(clientApp, firebaseConfig.firestoreDatabaseId);
+const firestoreDbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
+const publicDb = firestoreDbId ? getFirestore(clientApp, firestoreDbId) : getFirestore(clientApp);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

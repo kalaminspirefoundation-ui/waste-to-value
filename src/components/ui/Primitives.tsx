@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -330,6 +330,9 @@ export const ImageWithFallback: React.FC<{
   title?: string;
 }> = ({ src, alt, className = '', title }) => {
   const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
   if (!src || failed) {
     return (
       <div

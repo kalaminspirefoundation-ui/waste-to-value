@@ -34,9 +34,14 @@ import {
   StatusIndicator,
   Textarea,
 } from '../components/ui/Primitives';
-import { AccessibilityTriggerButton } from '../components/ui/AccessibilityToolbar';
+import { PortalFooter, PortalSwitcherDropdown } from '../components/ui/PortalSwitcherDropdown';
 import { PushAlertsCard } from '../components/ui/PushAlertsCard';
 import { ReceiptModal } from '../components/ui/ReceiptModal';
+import {
+  BengaluruRouteMap,
+  PUNARCHAKRA_HQ,
+  resolveOrderCoordinates,
+} from '../components/maps/BengaluruServiceMap';
 
 type ExecTab =
   | 'assigned'
@@ -325,7 +330,7 @@ export const ExecutivePortal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <AccessibilityTriggerButton compact />
+            <PortalSwitcherDropdown compact />
             <button
               type="button"
               onClick={() => setIsOfflineMode((v) => !v)}
@@ -720,23 +725,63 @@ export const ExecutivePortal: React.FC = () => {
                   {new Date(execProfile.activeShiftGps.updatedAt).toLocaleTimeString('en-IN')}
                 </div>
               )}
+
+              {pendingJobs.length > 0 && (
+                <BengaluruRouteMap
+                  origin={
+                    execProfile?.activeShiftGps
+                      ? { lat: execProfile.activeShiftGps.lat, lng: execProfile.activeShiftGps.lng }
+                      : { lat: PUNARCHAKRA_HQ.lat, lng: PUNARCHAKRA_HQ.lng }
+                  }
+                  destination={resolveOrderCoordinates(
+                    (activeJob || pendingJobs[0]).lat,
+                    (activeJob || pendingJobs[0]).lng,
+                    (activeJob || pendingJobs[0]).pinCode,
+                    (activeJob || pendingJobs[0]).zoneId
+                  )}
+                  originLabel={execProfile?.activeShiftGps ? 'Your EV Shift GPS' : 'Punarchakra Hub'}
+                  destinationLabel={`${(activeJob || pendingJobs[0]).orderNumber} · ${(activeJob || pendingJobs[0]).pinCode}`}
+                  destinationAddress={(activeJob || pendingJobs[0]).addressText}
+                  heightClass="h-[360px]"
+                />
+              )}
+
               <div className="space-y-3">
-                {pendingJobs.map((o) => (
-                  <div key={o.id} className="p-4 rounded-xl border border-[#202820]/10 bg-white flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-sm text-[#174B37]">{o.customerName}</p>
-                      <p className="text-xs text-[#202820]/70">{o.addressText} — {o.pinCode}</p>
-                    </div>
-                    <a
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.addressText)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 rounded-xl bg-[#174B37] text-white text-xs font-semibold whitespace-nowrap"
+                {pendingJobs.map((o) => {
+                  const isFocused = (activeJob?.id || pendingJobs[0]?.id) === o.id;
+                  return (
+                    <div
+                      key={o.id}
+                      className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3 ${
+                        isFocused ? 'border-[#174B37] bg-[#F7F9F6]' : 'border-[#202820]/10 bg-white'
+                      }`}
                     >
-                      Navigate Route
-                    </a>
-                  </div>
-                ))}
+                      <div>
+                        <p className="font-semibold text-sm text-[#174B37]">
+                          {o.orderNumber} · {o.customerName}
+                        </p>
+                        <p className="text-xs text-[#202820]/70">{o.addressText} — {o.pinCode}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant={isFocused ? 'primary' : 'outline'}
+                          onClick={() => setActiveJobId(o.id)}
+                        >
+                          {isFocused ? 'Active Route' : 'Preview Route'}
+                        </Button>
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(o.addressText)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3.5 py-2 rounded-xl bg-[#174B37]/10 text-[#174B37] text-xs font-semibold whitespace-nowrap hover:bg-[#174B37] hover:text-white transition-colors"
+                        >
+                          Open Google Maps
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </Card>
           )}
@@ -873,6 +918,7 @@ export const ExecutivePortal: React.FC = () => {
             </Card>
           )}
         </main>
+        <PortalFooter portalLabel="Pickup Executive Portal" withMobileBottomBarSpace />
       </div>
 
       {/* Mobile Bottom Nav */}

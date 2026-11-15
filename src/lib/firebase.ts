@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   collection,
   deleteDoc,
@@ -16,10 +16,30 @@ import {
 import { getMessaging, getToken, isSupported, MessagePayload, onMessage } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
 
+export const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const googleAuthProvider = new GoogleAuthProvider();
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const driveGoogleAuthProvider = new GoogleAuthProvider();
+SCOPES.forEach((scope) => {
+  driveGoogleAuthProvider.addScope(scope);
+});
+driveGoogleAuthProvider.setCustomParameters({ prompt: 'consent select_account' });
+const firestoreDbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
+export const db = firestoreDbId ? getFirestore(app, firestoreDbId) : getFirestore(app);
+
+// Strictly in-memory token cache (never stored in localStorage/sessionStorage)
+let cachedDriveAccessToken: string | null = null;
+let cachedDriveAccountEmail: string | null = null;
+let isDriveSigningIn = false;
+
+onAuthStateChanged(auth, (fbUser) => {
+  if (!fbUser && !isDriveSigningIn) {
+    cachedDriveAccessToken = null;
+    cachedDriveAccountEmail = null;
+  }
+});
 
 export enum OperationType {
   CREATE = 'create',
@@ -92,7 +112,44 @@ export async function signInWithGooglePopup() {
   return { user: credential.user, idToken };
 }
 
+export async function signInAdminGoogleDrivePopup() {
+  isDriveSigningIn = true;
+  try {
+    const result = await signInWithPopup(auth, driveGoogleAuthProvider);
+    const oauthCred = GoogleAuthProvider.credentialFromResult(result);
+    if (!oauthCred?.accessToken) {
+      throw new Error('Google Drive access permission was not granted.');
+    }
+    cachedDriveAccessToken = oauthCred.accessToken;
+    cachedDriveAccountEmail = result.user.email || null;
+    const idToken = await result.user.getIdToken();
+    return {
+      user: result.user,
+      idToken,
+      accessToken: cachedDriveAccessToken,
+      email: cachedDriveAccountEmail,
+    };
+  } finally {
+    isDriveSigningIn = false;
+  }
+}
+
+export function getDriveAccessToken(): string | null {
+  return cachedDriveAccessToken;
+}
+
+export function getDriveConnectedEmail(): string | null {
+  return cachedDriveAccountEmail;
+}
+
+export function clearDriveAccessToken(): void {
+  cachedDriveAccessToken = null;
+  cachedDriveAccountEmail = null;
+}
+
 export async function firebaseSignOut() {
+  cachedDriveAccessToken = null;
+  cachedDriveAccountEmail = null;
   await signOut(auth);
 }
 
@@ -109,6 +166,23 @@ export async function persistDocumentToFirestore(
       { ...payload, _syncedAt: serverTimestamp() },
       { merge }
     );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function persistStrictDocumentToFirestore(
+  collectionName: string,
+  docId: string,
+  payload: Record<string, unknown>,
+  merge = true
+) {
+  const path = `${collectionName}/${docId}`;
+  const cleaned = Object.fromEntries(
+    Object.entries(payload).filter(([, v]) => v !== undefined)
+  );
+  try {
+    await setDoc(doc(db, collectionName, docId), cleaned, { merge });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }

@@ -11,5 +11,6 @@ const adminApp = getApps().length
     });
 
 export const adminAuth = getAuth(adminApp);
-export const adminDb = getFirestore(adminApp, firebaseConfig.firestoreDatabaseId);
+const firestoreDbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
+export const adminDb = firestoreDbId ? getFirestore(adminApp, firestoreDbId) : getFirestore(adminApp);
 export const adminMessaging = getMessaging(adminApp);

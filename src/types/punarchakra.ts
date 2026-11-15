@@ -497,4 +497,54 @@ export interface SegregationChecklist {
   items: SegregationChecklistItem[];
 }
 
+export type DriveLedgerEventType =
+  | 'USER_LOGIN'
+  | 'USER_LOGOUT'
+  | 'USER_REGISTERED'
+  | 'PASSWORD_RESET'
+  | 'BOOKING_CREATED'
+  | 'ORDER_CANCELLED'
+  | 'EXECUTIVE_ASSIGNED'
+  | 'PICKUP_STATUS'
+  | 'SCRAP_WEIGHED'
+  | 'SCRAP_SOLD'
+  | 'PAYMENT_COMPLETED'
+  | 'PAYMENT_UPDATED'
+  | 'QUOTATION_ACTIVITY'
+  | 'SUPPORT_TICKET'
+  | 'RATE_OR_CMS_UPDATE'
+  | 'ADMIN_USER_MUTATION';
 
+export interface DriveLedgerRecord {
+  id: string;
+  sequenceNo: number;
+  timestamp: string;
+  eventType: DriveLedgerEventType;
+  actorUserId: string;
+  actorName: string;
+  actorRole: UserRole;
+  actorEmail?: string;
+  entityType: string;
+  entityId: string;
+  referenceCode?: string;
+  summary: string;
+  amountInr?: number;
+  weightKg?: number;
+  city?: string;
+  pinCode?: string;
+  payload: Record<string, unknown>;
+  driveSyncStatus: 'local_only' | 'synced_drive';
+  driveFileId?: string;
+  lastEditedBy?: string;
+  lastEditedAt?: string;
+}
+
+export interface DriveVaultFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  size?: string;
+  webViewLink?: string;
+  kindLabel: string;
+}

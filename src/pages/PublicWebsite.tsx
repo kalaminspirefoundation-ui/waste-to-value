@@ -31,6 +31,10 @@ import {
   X,
 } from 'lucide-react';
 import { AccessibilityTriggerButton } from '../components/ui/AccessibilityToolbar';
+import { PortalSwitcherDropdown } from '../components/ui/PortalSwitcherDropdown';
+import { SustainabilityImpactDashboard } from '../components/SustainabilityImpactDashboard';
+import { BengaluruCorridorsMap } from '../components/maps/BengaluruServiceMap';
+import { Punarchakra3DHubScene } from '../components/three/Punarchakra3DHubScene';
 import { usePunarchakra } from '../context/PunarchakraContext';
 import {
   COMMUNITY_ARTICLES_SEED,
@@ -388,27 +392,6 @@ export const PublicWebsite: React.FC = () => {
 
   const calcTotal = calcBreakdown.reduce((s, i) => s + i.subtotal, 0);
 
-  // Environmental impact aggregated from live database records
-  const environmentalStats = useMemo(() => {
-    const completedOrders = state.orders.filter((o) => o.status === 'payment_completed');
-    const totalKg = completedOrders.reduce((s, o) => s + (o.actualTotalWeight || o.estimatedTotalWeight), 0);
-    const totalCo2 = completedOrders.reduce(
-      (s, o) =>
-        s +
-        o.items.reduce((is, it) => {
-          const cat = state.categories.find((c) => c.id === it.categoryId);
-          return is + (it.actualQty ?? it.estimatedQty) * (cat?.co2FactorPerKg || 1.5);
-        }, 0),
-      0
-    );
-    return {
-      ordersCount: completedOrders.length,
-      totalKg: Math.round(totalKg * 10) / 10,
-      co2AvoidedKg: Math.round(totalCo2),
-      treesEquivalent: Math.max(1, Math.round(totalCo2 / 21)),
-    };
-  }, [state.orders, state.categories]);
-
   useEffect(() => {
     try {
       localStorage.setItem('punarchakra_learning_checklist_v1', JSON.stringify(checkedChecklistItems));
@@ -589,9 +572,9 @@ export const PublicWebsite: React.FC = () => {
         {mobileMenuOpen && (
           <div className="lg:hidden border-t border-[#202820]/10 bg-white px-4 py-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#202820]/10">
-              <span className="text-xs font-medium text-[#202820]/65">Bengaluru · Accessibility & ಭಾಷೆ</span>
+              <span className="text-xs font-medium text-[#202820]/65">Bengaluru · Portals & ಭಾಷೆ</span>
               <div className="flex items-center gap-2">
-                <AccessibilityTriggerButton compact />
+                <PortalSwitcherDropdown compact />
                 <LanguageToggleButton language={language} onToggle={toggleLanguage} />
               </div>
             </div>
@@ -644,33 +627,14 @@ export const PublicWebsite: React.FC = () => {
         )}
       </header>
 
-      {/* Portal Quick Explorer, Accessibility & Language Toggle Strip */}
+      {/* Portal Quick Switcher & Language Toggle Strip */}
       <div className="bg-white border-b border-[#202820]/8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-[#202820]/65 font-medium">{t.explorePortals}</span>
-            <div className="flex flex-wrap items-center gap-2">
-              {(
-                [
-                  { role: 'b2c', label: t.b2cPortal },
-                  { role: 'b2b', label: t.b2bPortal },
-                  { role: 'executive', label: t.execPortal },
-                  { role: 'admin', label: t.adminPortal },
-                ] as const
-              ).map((item) => (
-                <button
-                  key={item.role}
-                  type="button"
-                  onClick={() => quickDemoLogin(item.role)}
-                  className="px-3 py-1.5 rounded-lg border border-[#174B37]/18 bg-[#F7F9F6] text-[#174B37] font-medium hover:bg-[#174B37] hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
+            <PortalSwitcherDropdown />
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <AccessibilityTriggerButton />
             <LanguageToggleButton language={language} onToggle={toggleLanguage} />
           </div>
         </div>
@@ -679,18 +643,19 @@ export const PublicWebsite: React.FC = () => {
       <main id="main-content" tabIndex={-1}>
       {/* Hero Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-12 lg:pt-14 lg:pb-16">
-        <div className="grid lg:grid-cols-12 gap-8 lg:gap-10 items-stretch">
-          <div className="lg:col-span-6 flex flex-col justify-center space-y-6">
-            <div className="text-xs font-medium text-[#174B37] flex items-center gap-2">
-              <span>{t.heroKicker}</span>
+        <div className="grid lg:grid-cols-12 gap-8 lg:gap-10 items-center">
+          <div className="lg:col-span-5 flex flex-col justify-between space-y-6">
+            <div className="space-y-4">
+              <p className="text-xs font-medium text-[#28A66A]">{t.heroKicker}</p>
+              <h1 className="font-display font-bold text-[#174B37] tracking-tight leading-[1.08] text-[clamp(2.15rem,3.6vw,3.25rem)] [text-wrap:balance]">
+                {language === 'kn' ? t.heroHeadline : state.cms.heroHeadline}
+              </h1>
+              <p className="text-sm sm:text-base text-[#202820]/75 leading-relaxed">
+                {language === 'kn' ? t.heroSubheading : state.cms.heroSubheading}
+              </p>
             </div>
-            <h1 className="font-display font-bold text-[#174B37] tracking-tight leading-[1.08] text-[clamp(2.25rem,4vw,3.5rem)] [text-wrap:balance]">
-              {language === 'kn' ? t.heroHeadline : state.cms.heroHeadline}
-            </h1>
-            <p className="text-base sm:text-lg text-[#202820]/75 leading-relaxed max-w-xl">
-              {language === 'kn' ? t.heroSubheading : state.cms.heroSubheading}
-            </p>
-            <div className="flex flex-wrap items-center gap-3.5 pt-1">
+
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 size="lg"
                 onClick={() => {
@@ -718,7 +683,8 @@ export const PublicWebsite: React.FC = () => {
                 {t.ctaRegisterBiz}
               </Button>
             </div>
-            <div className="pt-2 grid grid-cols-3 gap-4 border-t border-[#202820]/10">
+
+            <div className="pt-4 grid grid-cols-3 gap-4 border-t border-[#202820]/10">
               <div>
                 <p className="font-display font-bold text-xl text-[#174B37] tabular-nums">12+</p>
                 <p className="text-xs text-[#202820]/60">{t.statCategories}</p>
@@ -736,13 +702,79 @@ export const PublicWebsite: React.FC = () => {
             </div>
           </div>
 
-          <div className="lg:col-span-6">
-            <div className="h-full min-h-[300px] lg:min-h-[440px] rounded-2xl overflow-hidden border border-[#202820]/10 shadow-sm bg-white">
-              <ImageWithFallback
-                src={HERO_IMAGE}
-                alt="Punarchakra electric doorstep scrap collection and sorting hub"
-                className="w-full h-full object-cover"
-              />
+          <div className="lg:col-span-7">
+            <div className="rounded-3xl bg-white border border-[#202820]/10 overflow-hidden shadow-sm">
+              <div className="relative aspect-[16/9] w-full overflow-hidden bg-[#EBF1EB]">
+                <ImageWithFallback
+                  src={HERO_IMAGE}
+                  alt="Punarchakra Bengaluru solar-powered Waste-to-Value sorting hub with electric collection truck, digital weighing platform, and sorted scrap bays"
+                  className="w-full h-full object-cover object-center"
+                />
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#174B37]/90 via-[#174B37]/45 to-transparent px-5 pt-10 pb-4 flex flex-col sm:flex-row sm:items-end justify-between gap-2 text-white">
+                  <div>
+                    <p className="font-display font-bold text-sm sm:text-base tracking-tight">
+                      {language === 'kn'
+                        ? 'ಪುನರ್ಚಕ್ರ ಬೆಂಗಳೂರು W2V ಮತ್ತು EV ಸಂಗ್ರಹಣಾ ಕೇಂದ್ರ'
+                        : 'Punarchakra Bengaluru W2V & EV Recovery Hub'}
+                    </p>
+                    <p className="text-xs text-white/85">
+                      {language === 'kn'
+                        ? 'ಸೌರಶಕ್ತಿ ವಿಂಗಡಣಾ ಕೇಂದ್ರ · ಡಿಜಿಟಲ್ ತೂಕ ಯಂತ್ರ · ತಕ್ಷಣದ UPI ಪಾವತಿ'
+                        : 'Solar-powered material grading · EV fleet dispatch · Calibrated digital weighing'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 whitespace-nowrap shrink-0">
+                    <a
+                      href="#w2v-studio"
+                      onClick={() => setActiveSeoPage('w2v-studio')}
+                      className="text-xs font-semibold text-white hover:text-[#A5D66D] underline-offset-4 hover:underline"
+                    >
+                      {language === 'kn' ? '3D ಹಬ್ ವೀಕ್ಷಿಸಿ' : 'Explore 3D Hub'}
+                    </a>
+                    <span className="text-white/40">·</span>
+                    <a
+                      href="#impact"
+                      onClick={() => setActiveSeoPage('impact')}
+                      className="text-xs font-semibold text-[#A5D66D] hover:text-white underline-offset-4 hover:underline"
+                    >
+                      {language === 'kn' ? 'ಲೈವ್ ಪ್ರಭಾವ ವೀಕ್ಷಿಸಿ' : 'View Live Impact'}
+                    </a>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-[#202820]/10 bg-white">
+                <div className="px-4 py-3.5">
+                  <p className="text-xs font-semibold text-[#174B37]">
+                    {language === 'kn' ? '01. EV ಮನೆಬಾಗಿಲ ಪಿಕಪ್' : '01. Doorstep EV Dispatch'}
+                  </p>
+                  <p className="text-xs text-[#202820]/65 mt-0.5 leading-snug">
+                    {language === 'kn'
+                      ? 'ಉತ್ತರ ಬೆಂಗಳೂರು ಮತ್ತು ಕೈಗಾರಿಕಾ ವಲಯಗಳಲ್ಲಿ 2.5 ಗಂಟೆಗಳ ಸ್ಲಾಟ್'
+                      : '2.5-hr slots across North BLR & Industrial Hubs'}
+                  </p>
+                </div>
+                <div className="px-4 py-3.5">
+                  <p className="text-xs font-semibold text-[#174B37]">
+                    {language === 'kn' ? '02. ನಿಖರ ಡಿಜಿಟಲ್ ತೂಕ' : '02. Digital Scale & OTP'}
+                  </p>
+                  <p className="text-xs text-[#202820]/65 mt-0.5 leading-snug">
+                    {language === 'kn'
+                      ? 'ನಿಮ್ಮ ಮುಂದೆಯೇ ±10g ನಿಖರ ತೂಕ ಮತ್ತು ಲಾಕ್ ಆದ ದರ'
+                      : '±10g calibrated weighing at locked published rates'}
+                  </p>
+                </div>
+                <div className="px-4 py-3.5">
+                  <p className="text-xs font-semibold text-[#174B37]">
+                    {language === 'kn' ? '03. ತಕ್ಷಣದ ಪಾವತಿ & W2V' : '03. Instant UPI & W2V'}
+                  </p>
+                  <p className="text-xs text-[#202820]/65 mt-0.5 leading-snug">
+                    {language === 'kn'
+                      ? 'ತಕ್ಷಣದ UPI/RTGS ಮತ್ತು ಮೌಲ್ಯವರ್ಧಿತ ಉತ್ಪನ್ನ ತಯಾರಿಕೆ'
+                      : 'Instant UPI/RTGS cash + upcycled W2V manufacturing'}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -858,6 +890,14 @@ export const PublicWebsite: React.FC = () => {
             </div>
           )}
         </Card>
+
+        {/* Interactive Bengaluru Service Corridors Google Map */}
+        <BengaluruCorridorsMap
+          zones={state.serviceZones}
+          selectedPin={pinChecked.checked ? pinChecked.pin : undefined}
+          language={language}
+          onSelectPinForBooking={(segment, pin) => handleSellFromCalculator(segment, pin)}
+        />
       </section>
 
       {/* Section 1: 12 Scrap Categories */}
@@ -1157,6 +1197,13 @@ export const PublicWebsite: React.FC = () => {
             <Sparkles className="w-4 h-4" aria-hidden="true" />
             {t.w2vCta}
           </Button>
+        </div>
+
+        <div className="mb-8">
+          <Punarchakra3DHubScene
+            language={language}
+            onCtaClick={() => handleSellFromCalculator('b2c')}
+          />
         </div>
 
         <div className="grid md:grid-cols-3 gap-6">
@@ -1845,50 +1892,9 @@ export const PublicWebsite: React.FC = () => {
         )}
       </Modal>
 
-      {/* Section 6 & 7: Environmental Impact + Customer Testimonials */}
+      {/* Section 6 & 7: Sustainability Impact Dashboard + Customer Testimonials */}
       <section id="impact" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14 space-y-12">
-        <div className="grid md:grid-cols-4 gap-5">
-          <Card padding="md">
-            <div className="flex items-center justify-between text-xs text-[#202820]/60">
-              <span>{t.impactOrders}</span>
-              <Recycle className="w-4 h-4 text-[#28A66A]" />
-            </div>
-            <p className="font-display text-3xl font-bold text-[#174B37] mt-2 tabular-nums">
-              {environmentalStats.ordersCount}
-            </p>
-            <p className="text-xs text-[#202820]/55 mt-1">{t.impactOrdersSub}</p>
-          </Card>
-          <Card padding="md">
-            <div className="flex items-center justify-between text-xs text-[#202820]/60">
-              <span>{t.impactWaste}</span>
-              <Scale className="w-4 h-4 text-[#28A66A]" />
-            </div>
-            <p className="font-display text-3xl font-bold text-[#174B37] mt-2 tabular-nums">
-              {environmentalStats.totalKg.toLocaleString('en-IN')} kg
-            </p>
-            <p className="text-xs text-[#202820]/55 mt-1">{t.impactWasteSub}</p>
-          </Card>
-          <Card padding="md">
-            <div className="flex items-center justify-between text-xs text-[#202820]/60">
-              <span>{t.impactCo2}</span>
-              <Leaf className="w-4 h-4 text-[#28A66A]" />
-            </div>
-            <p className="font-display text-3xl font-bold text-[#174B37] mt-2 tabular-nums">
-              {environmentalStats.co2AvoidedKg.toLocaleString('en-IN')} kg
-            </p>
-            <p className="text-xs text-[#202820]/55 mt-1">{t.impactCo2Sub}</p>
-          </Card>
-          <Card padding="md">
-            <div className="flex items-center justify-between text-xs text-[#202820]/60">
-              <span>{t.impactTrees}</span>
-              <Leaf className="w-4 h-4 text-[#28A66A]" />
-            </div>
-            <p className="font-display text-3xl font-bold text-[#174B37] mt-2 tabular-nums">
-              {environmentalStats.treesEquivalent} Trees
-            </p>
-            <p className="text-xs text-[#202820]/55 mt-1">{t.impactTreesSub}</p>
-          </Card>
-        </div>
+        <SustainabilityImpactDashboard />
 
         <div>
           <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#174B37] mb-6">
@@ -2102,9 +2108,13 @@ export const PublicWebsite: React.FC = () => {
             </ul>
           </div>
         </div>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-white/55">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-white/55">
           <span>© 2026 Punarchakra Circular Technologies Pvt. Ltd. All rights reserved.</span>
-          <span>{t.footerCityScope}</span>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <span>{t.footerCityScope}</span>
+            <PortalSwitcherDropdown compact inverted />
+            <AccessibilityTriggerButton inverted />
+          </div>
         </div>
       </footer>
 

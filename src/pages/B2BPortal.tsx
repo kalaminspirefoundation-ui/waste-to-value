@@ -40,7 +40,7 @@ import {
   StatusIndicator,
   Textarea,
 } from '../components/ui/Primitives';
-import { AccessibilityTriggerButton } from '../components/ui/AccessibilityToolbar';
+import { PortalFooter, PortalSwitcherDropdown } from '../components/ui/PortalSwitcherDropdown';
 import { PushAlertsCard } from '../components/ui/PushAlertsCard';
 import { ReceiptModal } from '../components/ui/ReceiptModal';
 
@@ -372,7 +372,7 @@ export const B2BPortal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <AccessibilityTriggerButton compact />
+            <PortalSwitcherDropdown compact />
             <Button variant="outline" size="sm" onClick={() => navigateTo('public')}>
               Public Site
             </Button>
@@ -1123,6 +1123,7 @@ export const B2BPortal: React.FC = () => {
             </Card>
           )}
         </main>
+        <PortalFooter portalLabel="B2B Enterprise Portal" />
       </div>
 
       {/* Add Branch Modal */}

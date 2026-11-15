@@ -176,6 +176,28 @@
         "createdAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["userId", "channel", "title", "message", "type", "isRead", "createdAt"]
+    },
+    "AdminLedgerEntry": {
+      "title": "AdminLedgerEntry",
+      "description": "Admin-exclusive lifecycle audit and transaction ledger synced to Google Drive.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "sequenceNo": { "type": "number" },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "eventType": { "type": "string", "maxLength": 48 },
+        "actorUserId": { "type": "string", "maxLength": 128 },
+        "actorName": { "type": "string", "maxLength": 160 },
+        "actorRole": { "type": "string", "enum": ["b2c", "b2b", "executive", "admin"] },
+        "entityType": { "type": "string", "maxLength": 64 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "referenceCode": { "type": "string", "maxLength": 64 },
+        "summary": { "type": "string", "maxLength": 500 },
+        "amountInr": { "type": "number" },
+        "weightKg": { "type": "number" },
+        "driveSyncStatus": { "type": "string", "enum": ["queued", "synced", "edited_by_admin"] }
+      },
+      "required": ["id", "timestamp", "eventType", "actorUserId", "actorRole", "entityType", "entityId", "summary"]
     }
   },
   "firestore": {
@@ -222,6 +244,10 @@
     "/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/PushNotification" },
       "description": "Real-time pickup and payment notifications per recipient."
+    },
+    "/adminLedger/{entryId}": {
+      "schema": { "$ref": "#/entities/AdminLedgerEntry" },
+      "description": "Admin-exclusive captured lifecycle ledger (login to scrap sold to payment) mirrored to Google Drive."
     }
   }
 }

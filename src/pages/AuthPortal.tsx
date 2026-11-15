@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { usePunarchakra } from '../context/PunarchakraContext';
 import { UserRole } from '../types/punarchakra';
-import { AccessibilityTriggerButton } from '../components/ui/AccessibilityToolbar';
+import { PortalFooter, PortalSwitcherDropdown } from '../components/ui/PortalSwitcherDropdown';
 import { AppLogo, Button, Card, Input, LanguageToggleButton, Select } from '../components/ui/Primitives';
 
 const ROLE_META: {
@@ -193,7 +193,7 @@ export const AuthPortal: React.FC = () => {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <AppLogo onClick={() => navigateTo('public')} />
           <div className="flex items-center gap-2">
-            <AccessibilityTriggerButton compact />
+            <PortalSwitcherDropdown compact />
             <LanguageToggleButton language={language} onToggle={toggleLanguage} />
             <Button variant="ghost" size="sm" onClick={() => navigateTo('public')}>
               <ArrowLeft className="w-4 h-4" />
@@ -651,6 +651,7 @@ export const AuthPortal: React.FC = () => {
           </Card>
         </div>
       </main>
+      <PortalFooter portalLabel="Unified Role Authentication" />
     </div>
   );
 };

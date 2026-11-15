@@ -124,6 +124,24 @@ service cloud.firestore {
         && data.isRead is bool;
     }
 
+    function isValidAdminLedgerEntry(data) {
+      return data.keys().hasAll(['id', 'timestamp', 'eventType', 'actorUserId', 'actorRole', 'entityType', 'entityId', 'summary'])
+        && data.keys().hasOnly([
+          'id', 'sequenceNo', 'timestamp', 'eventType', 'actorUserId', 'actorName', 'actorRole',
+          'actorEmail', 'entityType', 'entityId', 'referenceCode', 'summary', 'amountInr',
+          'weightKg', 'city', 'pinCode', 'payload', 'driveSyncStatus', 'driveFileId',
+          'lastEditedBy', 'lastEditedAt', '_syncedAt'
+        ])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.timestamp is string && data.timestamp.size() <= 64
+        && data.eventType is string && data.eventType.size() <= 48
+        && data.actorUserId is string && data.actorUserId.size() > 0 && data.actorUserId.size() <= 128
+        && data.actorRole in ['b2c', 'b2b', 'executive', 'admin']
+        && data.entityType is string && data.entityType.size() <= 64
+        && data.entityId is string && data.entityId.size() <= 128
+        && data.summary is string && data.summary.size() > 0 && data.summary.size() <= 500;
+    }
+
     // --- Collection Rules ---
 
     // Bootstrapped connection check doc
@@ -299,6 +317,18 @@ service cloud.firestore {
       allow update: if isValidId(notificationId) && isSignedIn() && isValidNotification(incoming())
         && (isAdmin() || (existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['isRead'])));
       allow delete: if isValidId(notificationId) && isAdmin();
+    }
+
+    // Admin-Only Master Lifecycle Ledger (Logins -> Bookings -> Weighing -> Scrap Sold -> Payments)
+    // Only Admin can view (get/list), edit (update), or delete (delete). Verified users may append their own action.
+    match /adminLedger/{entryId} {
+      allow get: if isValidId(entryId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(entryId) && isVerified() && isValidAdminLedgerEntry(incoming())
+        && (incoming().actorUserId == request.auth.uid || isAdmin());
+      allow update: if isValidId(entryId) && isAdmin() && isValidAdminLedgerEntry(incoming())
+        && incoming().actorUserId == existing().actorUserId;
+      allow delete: if isValidId(entryId) && isAdmin();
     }
   }
 }

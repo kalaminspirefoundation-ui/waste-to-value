@@ -2,18 +2,34 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   auth,
+  clearDriveAccessToken,
   deleteDocumentFromFirestore,
   FcmPermissionState,
   firebaseSignOut,
+  getDriveAccessToken,
+  getDriveConnectedEmail,
   persistDocumentToFirestore,
+  persistStrictDocumentToFirestore,
   registerFcmPushNotifications,
   showBrowserOrSwNotification,
+  signInAdminGoogleDrivePopup,
   signInWithGooglePopup,
   subscribeForegroundFcm,
   subscribeToLiveRates,
   subscribeUserNotifications,
   testFirestoreConnection,
 } from '../lib/firebase';
+import {
+  assertAdminDriveAccess,
+  buildLoginAuditCsv,
+  buildMasterLedgerJson,
+  buildScrapSalesAndPaymentsCsv,
+  deleteDriveVaultFile,
+  ensurePunarchakraVaultFolder,
+  listDriveVaultFiles,
+  readDriveVaultFileContent,
+  upsertDriveVaultFile,
+} from '../lib/googleDriveVault';
 import { LanguageCode, TRANSLATIONS } from '../i18n/translations';
 import {
   ADDRESSES_SEED,
@@ -25,6 +41,7 @@ import {
   COUPONS_SEED,
   CUSTOMER_PROFILES_SEED,
   DOCUMENTS_SEED,
+  DRIVE_LEDGER_SEED,
   EXECUTIVE_PROFILES_SEED,
   hashPassword,
   LOGIN_ACTIVITY_SEED,
@@ -52,6 +69,9 @@ import {
   Coupon,
   CustomerProfile,
   DocumentRecord,
+  DriveLedgerEventType,
+  DriveLedgerRecord,
+  DriveVaultFile,
   ExecutiveAssignment,
   ExecutiveProfile,
   ExecutiveRecommendation,
@@ -117,6 +137,7 @@ interface PunarchakraState {
   rewardTransactions: RewardTransaction[];
   cms: CmsContent;
   enquiries: ContactEnquiry[];
+  driveLedger: DriveLedgerRecord[];
 }
 
 export interface AccessibilitySettings {
@@ -133,7 +154,7 @@ const DEFAULT_A11Y: AccessibilitySettings = {
   reduceMotion: false,
 };
 
-const STORAGE_KEY = 'punarchakra_platform_state_v3';
+const STORAGE_KEY = 'punarchakra_platform_state_v5';
 const SESSION_KEY = 'punarchakra_active_session_v1';
 const LANG_KEY = 'punarchakra_lang_v1';
 const A11Y_KEY = 'punarchakra_a11y_v1';
@@ -164,14 +185,28 @@ const initialSeedState: PunarchakraState = {
   rewardTransactions: REWARD_TX_SEED,
   cms: CMS_SEED,
   enquiries: [],
+  driveLedger: DRIVE_LEDGER_SEED,
 };
 
 function loadInitialState(): PunarchakraState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('punarchakra_platform_state_v4');
     if (!raw) return initialSeedState;
     const parsed = JSON.parse(raw);
-    return { ...initialSeedState, ...parsed };
+    return {
+      ...initialSeedState,
+      ...parsed,
+      categories: SCRAP_CATEGORIES_SEED.map((seedCat) => {
+        const existing = Array.isArray(parsed.categories)
+          ? parsed.categories.find((c: ScrapCategory) => c.id === seedCat.id)
+          : null;
+        return existing ? { ...existing, imageUrl: seedCat.imageUrl } : seedCat;
+      }),
+      driveLedger:
+        Array.isArray(parsed.driveLedger) && parsed.driveLedger.length > 0
+          ? parsed.driveLedger
+          : DRIVE_LEDGER_SEED,
+    };
   } catch {
     return initialSeedState;
   }
@@ -387,6 +422,25 @@ interface ContextValue {
   adminUpdateCms: (cms: CmsContent) => void;
   adminAddCoupon: (coupon: Omit<Coupon, 'id'>) => void;
   resetDemoWorkspace: () => void;
+
+  // Admin-Only Google Drive Vault Integration (View, Edit, Delete, Sync)
+  driveConnectedEmail: string | null;
+  driveFolderId: string | null;
+  driveFiles: DriveVaultFile[];
+  driveSyncing: boolean;
+  lastDriveSyncAt: string | null;
+  connectAdminGoogleDrive: () => Promise<{ ok: boolean; error?: string }>;
+  disconnectAdminGoogleDrive: () => void;
+  syncAllLedgerToGoogleDrive: (recordsOverride?: DriveLedgerRecord[]) => Promise<{ ok: boolean; error?: string }>;
+  refreshDriveFiles: () => Promise<void>;
+  readDriveFile: (fileId: string) => Promise<string>;
+  adminEditDriveFile: (params: { fileId: string; fileName: string; mimeType: string; content: string }) => Promise<{ ok: boolean; error?: string }>;
+  adminDeleteDriveFile: (fileId: string) => Promise<{ ok: boolean; error?: string }>;
+  adminEditLedgerRecord: (
+    entryId: string,
+    updates: Partial<Pick<DriveLedgerRecord, 'summary' | 'referenceCode' | 'weightKg' | 'amountInr' | 'city' | 'pinCode'>>
+  ) => Promise<{ ok: boolean; error?: string }>;
+  adminDeleteLedgerRecord: (entryId: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 const PunarchakraContext = createContext<ContextValue | null>(null);
@@ -447,6 +501,13 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [fcmToken, setFcmToken] = useState<string | null>(null);
   const [lastPushAlert, setLastPushAlert] = useState<NotificationItem | null>(null);
   const pushChannelRef = useRef<BroadcastChannel | null>(null);
+
+  // Admin-Only Google Drive Vault State
+  const [driveConnectedEmail, setDriveConnectedEmail] = useState<string | null>(null);
+  const [driveFolderId, setDriveFolderId] = useState<string | null>(null);
+  const [driveFiles, setDriveFiles] = useState<DriveVaultFile[]>([]);
+  const [driveSyncing, setDriveSyncing] = useState(false);
+  const [lastDriveSyncAt, setLastDriveSyncAt] = useState<string | null>(null);
 
   const isLoading = loadingCount > 0;
   const t = TRANSLATIONS[language];
@@ -666,9 +727,25 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
             ? data.serviceZones.filter((z: ServiceZone) => z.city?.toLowerCase() === 'bengaluru')
             : [];
           const hasSegmentedZones = blrZones.some((z: ServiceZone) => Boolean(z.serviceSegment));
+          const LEGACY_SHARED_IMAGES = new Set([
+            '/src/assets/images/scrap_paper_cardboard_1794724497461.jpg',
+            '/src/assets/images/scrap_metals_copper_brass_1794724497571.jpg',
+            '/src/assets/images/scrap_ewaste_appliances_1794724497942.jpg',
+            '/src/assets/images/scrap_plastic_glass_1794724498791.jpg',
+          ]);
+          const normalizedCategories =
+            Array.isArray(data.categories) && data.categories.length > 0
+              ? data.categories.map((cat: ScrapCategory) => {
+                  const seedMatch = SCRAP_CATEGORIES_SEED.find((s) => s.id === cat.id);
+                  if (seedMatch && (!cat.imageUrl || LEGACY_SHARED_IMAGES.has(cat.imageUrl))) {
+                    return { ...cat, imageUrl: seedMatch.imageUrl };
+                  }
+                  return cat;
+                })
+              : null;
           setState((prev) => ({
             ...prev,
-            categories: Array.isArray(data.categories) && data.categories.length > 0 ? data.categories : prev.categories,
+            categories: normalizedCategories || prev.categories,
             serviceZones: blrZones.length > 0 && hasSegmentedZones ? blrZones : prev.serviceZones,
           }));
         }
@@ -692,12 +769,63 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
     });
 
+    const hydrateCloudOperationalData = async (token: string) => {
+      try {
+        const headers = { Authorization: `Bearer ${token}` };
+        const [ordersRes, quotesRes] = await Promise.all([
+          fetch('/api/orders', { headers }).catch(() => null),
+          fetch('/api/quotations', { headers }).catch(() => null),
+        ]);
+        if (!active) return;
+
+        let cloudOrders: PickupOrder[] = [];
+        let cloudQuotes: Quotation[] = [];
+        if (ordersRes && ordersRes.ok) {
+          const data = await ordersRes.json();
+          if (Array.isArray(data.orders)) cloudOrders = data.orders;
+        }
+        if (quotesRes && quotesRes.ok) {
+          const data = await quotesRes.json();
+          if (Array.isArray(data.quotations)) cloudQuotes = data.quotations;
+        }
+
+        if (cloudOrders.length > 0 || cloudQuotes.length > 0) {
+          setState((prev) => {
+            const existingOrderIds = new Set(prev.orders.map((o) => o.id));
+            const freshOrders = cloudOrders.filter((o) => o?.id && !existingOrderIds.has(o.id));
+            const mergedExistingOrders = prev.orders.map((o) => {
+              const cloudMatch = cloudOrders.find((co) => co.id === o.id);
+              if (cloudMatch && cloudMatch.updatedAt > o.updatedAt) return cloudMatch;
+              return o;
+            });
+
+            const existingQuoteIds = new Set(prev.quotations.map((q) => q.id));
+            const freshQuotes = cloudQuotes.filter((q) => q?.id && !existingQuoteIds.has(q.id));
+            const mergedExistingQuotes = prev.quotations.map((q) => {
+              const cloudMatch = cloudQuotes.find((cq) => cq.id === q.id);
+              if (cloudMatch && cloudMatch.updatedAt > q.updatedAt) return cloudMatch;
+              return q;
+            });
+
+            return {
+              ...prev,
+              orders: [...freshOrders, ...mergedExistingOrders],
+              quotations: [...freshQuotes, ...mergedExistingQuotes],
+            };
+          });
+        }
+      } catch {
+        // Cloud hydration is additive; local state remains active
+      }
+    };
+
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (!active) return;
       if (fbUser) {
         try {
           const token = await fbUser.getIdToken();
           firebaseIdTokenRef.current = token;
+          hydrateCloudOperationalData(token);
         } catch {
           firebaseIdTokenRef.current = null;
         }
@@ -1008,6 +1136,17 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
     };
   }, [currentUser?.id, currentUser?.role]);
 
+  // Strict RBAC guard: revoke in-memory Google Drive access whenever active user is not Admin
+  useEffect(() => {
+    if (currentUser?.role !== 'admin') {
+      clearDriveAccessToken();
+      setDriveConnectedEmail(null);
+      setDriveFolderId(null);
+      setDriveFiles([]);
+      setLastDriveSyncAt(null);
+    }
+  }, [currentUser?.role]);
+
   const appendAudit = (
     prev: PunarchakraState,
     actor: User | { id: string; name: string; role: UserRole },
@@ -1029,6 +1168,77 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
     },
     ...prev.auditLogs,
   ];
+
+  const mirrorLedgerEntryToFirestore = (entry: DriveLedgerRecord) => {
+    if (!auth.currentUser || !auth.currentUser.emailVerified) return;
+    persistDocumentToFirestore('adminLedger', entry.id, {
+      id: entry.id,
+      sequenceNo: entry.sequenceNo,
+      timestamp: entry.timestamp,
+      eventType: entry.eventType,
+      actorUserId: auth.currentUser.uid,
+      actorName: entry.actorName,
+      actorRole: entry.actorRole,
+      actorEmail: entry.actorEmail || '',
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      referenceCode: entry.referenceCode || '',
+      summary: entry.summary.slice(0, 480),
+      ...(entry.amountInr !== undefined ? { amountInr: entry.amountInr } : {}),
+      ...(entry.weightKg !== undefined ? { weightKg: entry.weightKg } : {}),
+      city: entry.city || 'Bengaluru',
+      pinCode: entry.pinCode || '',
+      payload: {
+        ...entry.payload,
+        platformActorUserId: entry.actorUserId,
+      },
+      driveSyncStatus: entry.driveSyncStatus,
+    }).catch(() => {});
+  };
+
+  const appendDriveLedger = (
+    prev: PunarchakraState,
+    input: {
+      eventType: DriveLedgerEventType;
+      actorUserId: string;
+      actorName: string;
+      actorRole: UserRole;
+      actorEmail?: string;
+      entityType: string;
+      entityId: string;
+      referenceCode?: string;
+      summary: string;
+      amountInr?: number;
+      weightKg?: number;
+      city?: string;
+      pinCode?: string;
+      payload: Record<string, unknown>;
+    }
+  ): DriveLedgerRecord[] => {
+    const maxSeq = prev.driveLedger.reduce((m, r) => Math.max(m, r.sequenceNo || 0), 0);
+    const entry: DriveLedgerRecord = {
+      id: `dl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      sequenceNo: maxSeq + 1,
+      timestamp: new Date().toISOString(),
+      eventType: input.eventType,
+      actorUserId: input.actorUserId,
+      actorName: input.actorName,
+      actorRole: input.actorRole,
+      actorEmail: input.actorEmail,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      referenceCode: input.referenceCode,
+      summary: input.summary,
+      amountInr: input.amountInr,
+      weightKg: input.weightKg,
+      city: input.city || 'Bengaluru',
+      pinCode: input.pinCode,
+      payload: input.payload,
+      driveSyncStatus: 'local_only',
+    };
+    mirrorLedgerEntryToFirestore(entry);
+    return [entry, ...prev.driveLedger];
+  };
 
   const triggerNavigationSkeleton = (label: string) => {
     setIsNavigatingSkeleton(true);
@@ -1120,6 +1330,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
             },
             ...prev.loginActivity,
           ],
+          driveLedger: appendDriveLedger(prev, {
+            eventType: 'USER_LOGIN',
+            actorUserId: user.id,
+            actorName: user.name,
+            actorRole: user.role,
+            actorEmail: user.email,
+            entityType: 'Session',
+            entityId: user.id,
+            referenceCode: 'LOGIN-FAILED',
+            summary: `Failed password attempt for ${user.name} (${user.role.toUpperCase()})`,
+            payload: { method: 'Email/Password', status: 'failed' },
+          }),
         }));
         return { ok: false, error: 'Incorrect password. Demo accounts use "Punarchakra@123".' };
       }
@@ -1139,6 +1361,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           },
           ...prev.loginActivity,
         ],
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'USER_LOGIN',
+          actorUserId: user.id,
+          actorName: user.name,
+          actorRole: user.role,
+          actorEmail: user.email,
+          entityType: 'Session',
+          entityId: user.id,
+          referenceCode: `LOGIN-${user.role.toUpperCase()}`,
+          summary: `${user.name} (${user.role.toUpperCase()}) signed in via Email/Password`,
+          payload: { method: 'Email/Password', status: 'success', remember },
+        }),
       }));
       triggerNavigationSkeleton(`Loading ${user.role.toUpperCase()} Portal...`);
       setActiveView(user.role);
@@ -1178,6 +1412,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           },
           ...prev.loginActivity,
         ],
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'USER_LOGIN',
+          actorUserId: user.id,
+          actorName: user.name,
+          actorRole: user.role,
+          actorEmail: user.email,
+          entityType: 'Session',
+          entityId: user.id,
+          referenceCode: `OTP-${user.role.toUpperCase()}`,
+          summary: `${user.name} (${user.role.toUpperCase()}) verified login via Mobile OTP`,
+          payload: { method: 'Mobile/OTP', status: 'success', mobileLast4: normalized.slice(-4) },
+        }),
       }));
       triggerNavigationSkeleton(`Loading ${user.role.toUpperCase()} Portal...`);
       setActiveView(user.role);
@@ -1263,6 +1509,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
             activeUserId,
             `Authenticated via Google (${verifiedRole.toUpperCase()})`
           ),
+          driveLedger: appendDriveLedger(prev, {
+            eventType: 'USER_LOGIN',
+            actorUserId: activeUserId,
+            actorName: syncedName,
+            actorRole: verifiedRole,
+            actorEmail: cleanEmail,
+            entityType: 'Session',
+            entityId: activeUserId,
+            referenceCode: `GOOGLE-${verifiedRole.toUpperCase()}`,
+            summary: `${syncedName} (${verifiedRole.toUpperCase()}) authenticated via Google OAuth`,
+            payload: { method: 'Google Sign-In', status: 'success', uid: fbUser.uid },
+          }),
         };
 
         if (verifiedRole === 'b2c' && !prev.customerProfiles.some((cp) => cp.userId === activeUserId)) {
@@ -1316,6 +1574,20 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return next;
       });
 
+      if (fbUser.emailVerified && verifiedRole !== 'admin') {
+        persistStrictDocumentToFirestore('users', fbUser.uid, {
+          uid: fbUser.uid,
+          role: verifiedRole,
+          name: syncedName,
+          email: cleanEmail,
+          mobile: newUserRecord.mobile,
+          status: 'active',
+          createdAt: newUserRecord.createdAt,
+          updatedAt: now,
+          createdBy: newUserRecord.createdBy,
+        }).catch(() => {});
+      }
+
       setSession(activeUserId, true);
       setActiveView(verifiedRole);
       notify('success', `Signed in with Google — ${syncedName}`, `Portal: ${verifiedRole.toUpperCase()}`);
@@ -1349,6 +1621,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         },
         ...prev.loginActivity,
       ],
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'USER_LOGIN',
+        actorUserId: user.id,
+        actorName: user.name,
+        actorRole: user.role,
+        actorEmail: user.email,
+        entityType: 'Session',
+        entityId: user.id,
+        referenceCode: `PORTAL-SWITCH-${user.role.toUpperCase()}`,
+        summary: `Portal switched / logged in as ${user.name} (${user.role.toUpperCase()})`,
+        payload: { method: 'Quick Demo / Portal Switcher', status: 'success' },
+      }),
     }));
     setActiveView(role);
     notify('success', `Switched to ${user.name}`, `Active portal: ${role.toUpperCase()}`);
@@ -1402,6 +1686,20 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         ...prev,
         users: [newUser, ...prev.users],
         auditLogs: appendAudit(prev, newUser, 'USER_REGISTERED', 'User', userId, `Registered ${payload.role.toUpperCase()} account (${cleanEmail})`),
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'USER_REGISTERED',
+          actorUserId: userId,
+          actorName: newUser.name,
+          actorRole: newUser.role,
+          actorEmail: cleanEmail,
+          entityType: 'User',
+          entityId: userId,
+          referenceCode: `REG-${payload.role.toUpperCase()}`,
+          summary: `New ${payload.role.toUpperCase()} account registered: ${newUser.name} (${cleanEmail})`,
+          city: payload.city || 'Bengaluru',
+          pinCode: payload.pinCode,
+          payload: { mobile: payload.mobile, gstin: payload.gstin, address: payload.address },
+        }),
       };
       if (payload.role === 'b2c') {
         next.customerProfiles = [
@@ -1507,11 +1805,44 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         u.id === target.id ? { ...u, passwordHash: newHash, updatedAt: new Date().toISOString() } : u
       ),
       auditLogs: appendAudit(prev, target, 'PASSWORD_RESET', 'User', target.id, `Password reset verified for ${cleanEmail}`),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'PASSWORD_RESET',
+        actorUserId: target.id,
+        actorName: target.name,
+        actorRole: target.role,
+        actorEmail: cleanEmail,
+        entityType: 'User',
+        entityId: target.id,
+        referenceCode: 'PWD-RESET',
+        summary: `Password reset verified for ${target.name} (${cleanEmail})`,
+        payload: { role: target.role },
+      }),
     }));
     return { ok: true };
   };
 
   const logout = () => {
+    if (currentUser) {
+      setState((prev) => ({
+        ...prev,
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'USER_LOGOUT',
+          actorUserId: currentUser.id,
+          actorName: currentUser.name,
+          actorRole: currentUser.role,
+          actorEmail: currentUser.email,
+          entityType: 'Session',
+          entityId: currentUser.id,
+          referenceCode: `LOGOUT-${currentUser.role.toUpperCase()}`,
+          summary: `${currentUser.name} (${currentUser.role.toUpperCase()}) signed out`,
+          payload: { role: currentUser.role },
+        }),
+      }));
+    }
+    clearDriveAccessToken();
+    setDriveConnectedEmail(null);
+    setDriveFolderId(null);
+    setDriveFiles([]);
     setCurrentUserId(null);
     firebaseIdTokenRef.current = null;
     firebaseSignOut().catch(() => {});
@@ -1802,10 +2133,37 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         orderId,
         `Created ${orderNumber} (${estWeight} kg, est. ₹${estAmount})`
       ),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'BOOKING_CREATED',
+        actorUserId: customer.id,
+        actorName: customer.name,
+        actorRole: customer.role,
+        actorEmail: customer.email,
+        entityType: 'PickupOrder',
+        entityId: orderId,
+        referenceCode: orderNumber,
+        summary: `Booked ${customerType.toUpperCase()} pickup ${orderNumber} (${estWeight} kg · est. ₹${estAmount}) at PIN ${payload.pinCode}`,
+        weightKg: estWeight,
+        amountInr: estAmount,
+        city: payload.city,
+        pinCode: payload.pinCode,
+        payload: {
+          orderNumber,
+          scheduledDate: payload.scheduledDate,
+          timeSlot: payload.timeSlot,
+          addressText: payload.addressText,
+          items: orderItems.map((i) => ({ categoryName: i.categoryName, estimatedQty: i.estimatedQty, rate: i.appliedRate })),
+        },
+      }),
     }));
 
     if (firebaseIdTokenRef.current) {
       postToApi('/api/orders', newOrder);
+    }
+    if (auth.currentUser && auth.currentUser.emailVerified && auth.currentUser.uid === customer.id) {
+      persistStrictDocumentToFirestore('pickupOrders', newOrder.id, newOrder as unknown as Record<string, unknown>).catch(
+        () => {}
+      );
     }
 
     dispatchPickupPush({
@@ -1840,6 +2198,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       ),
       auditLogs: appendAudit(prev, actor, 'ORDER_CANCELLED', 'PickupOrder', orderId, reason),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'ORDER_CANCELLED',
+        actorUserId: actor.id,
+        actorName: actor.name,
+        actorRole: actor.role,
+        entityType: 'PickupOrder',
+        entityId: orderId,
+        referenceCode: existing?.orderNumber || orderId,
+        summary: `Order ${existing?.orderNumber || orderId} cancelled: ${reason}`,
+        pinCode: existing?.pinCode,
+        payload: { reason, orderNumber: existing?.orderNumber },
+      }),
     }));
     if (existing) {
       dispatchPickupPush({
@@ -1943,6 +2313,17 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setState((prev) => ({
       ...prev,
       supportTickets: [ticket, ...prev.supportTickets],
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'SUPPORT_TICKET',
+        actorUserId: payload.userId,
+        actorName: payload.userName,
+        actorRole: payload.userRole,
+        entityType: 'SupportTicket',
+        entityId: ticket.id,
+        referenceCode: ticketNumber,
+        summary: `Support ticket ${ticketNumber} opened: ${payload.subject}`,
+        payload: { category: payload.category, message: payload.message },
+      }),
     }));
     if (firebaseIdTokenRef.current) {
       postToApi('/api/support-tickets', ticket);
@@ -2015,6 +2396,21 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         newQuote.id,
         `Submitted ${quoteNumber} (${totalWeight} kg)`
       ),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'QUOTATION_ACTIVITY',
+        actorUserId: payload.businessUserId,
+        actorName: biz?.name || 'B2B Client',
+        actorRole: 'b2b',
+        actorEmail: biz?.email,
+        entityType: 'Quotation',
+        entityId: newQuote.id,
+        referenceCode: quoteNumber,
+        summary: `Submitted B2B quotation ${quoteNumber} (${totalWeight} kg at PIN ${payload.pinCode})`,
+        weightKg: totalWeight,
+        city: payload.city,
+        pinCode: payload.pinCode,
+        payload: { items, pickupLocation: payload.pickupLocation },
+      }),
     }));
     if (firebaseIdTokenRef.current) {
       postToApi('/api/quotations', newQuote);
@@ -2084,6 +2480,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         quotations,
         notifications: [notif, ...prev.notifications],
         auditLogs: appendAudit(prev, actor, 'QUOTATION_PRICED', 'Quotation', quotationId, `Issued quote ${targetQuoteNumber} at ₹${totalQuoted}`),
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'QUOTATION_ACTIVITY',
+          actorUserId: actor.id,
+          actorName: actor.name,
+          actorRole: 'admin',
+          entityType: 'Quotation',
+          entityId: quotationId,
+          referenceCode: targetQuoteNumber,
+          amountInr: totalQuoted,
+          summary: `Admin priced quotation ${targetQuoteNumber} at ₹${totalQuoted.toLocaleString('en-IN')}`,
+          payload: { adminNotes, pricedItems },
+        }),
       };
     });
     if (targetQuote) {
@@ -2112,6 +2520,17 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : q
       ),
       auditLogs: appendAudit(prev, actor, `QUOTATION_${decision.toUpperCase()}`, 'Quotation', quotationId, revisionNotes || decision),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'QUOTATION_ACTIVITY',
+        actorUserId: actor.id,
+        actorName: actor.name,
+        actorRole: actor.role,
+        entityType: 'Quotation',
+        entityId: quotationId,
+        referenceCode: targetQuote?.quoteNumber || quotationId,
+        summary: `Quotation ${targetQuote?.quoteNumber || quotationId} marked ${decision}`,
+        payload: { decision, revisionNotes: revisionNotes || '' },
+      }),
     }));
     if (targetQuote) {
       const adminUsers = state.users.filter((u) => u.role === 'admin' && u.status === 'active');
@@ -2209,6 +2628,21 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         orderId,
         `Converted ${quote.quoteNumber} into Order ${orderNumber}`
       ),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'BOOKING_CREATED',
+        actorUserId: quote.businessUserId,
+        actorName: quote.businessName,
+        actorRole: 'b2b',
+        entityType: 'PickupOrder',
+        entityId: orderId,
+        referenceCode: orderNumber,
+        weightKg: quote.totalEstimatedWeightKg,
+        amountInr: newOrder.estimatedTotalAmount,
+        city: quote.city,
+        pinCode: quote.pinCode,
+        summary: `Converted quotation ${quote.quoteNumber} into B2B bulk pickup ${orderNumber} (${quote.totalEstimatedWeightKg} kg)`,
+        payload: { quotationNumber: quote.quoteNumber, timeSlot },
+      }),
     }));
 
     const adminUsers = state.users.filter((u) => u.role === 'admin' && u.status === 'active');
@@ -2272,6 +2706,17 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           orderId,
           rejectionReason || 'Accepted pickup job'
         ),
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'PICKUP_STATUS',
+          actorUserId: executiveUserId,
+          actorName: exec?.name || 'Executive',
+          actorRole: 'executive',
+          entityType: 'PickupOrder',
+          entityId: orderId,
+          referenceCode: orderId,
+          summary: `Executive ${exec?.name || executiveUserId} ${accept ? 'accepted' : 'declined'} assignment for ${orderId}`,
+          payload: { accept, rejectionReason: rejectionReason || '' },
+        }),
       };
     });
     const targetOrder = state.orders.find((o) => o.id === orderId);
@@ -2329,6 +2774,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         ...prev,
         orders,
         notifications: customerId ? [notif, ...prev.notifications] : prev.notifications,
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'PICKUP_STATUS',
+          actorUserId: actor.id,
+          actorName: actor.name,
+          actorRole: 'executive',
+          entityType: 'PickupOrder',
+          entityId: orderId,
+          referenceCode: orderNumber || orderId,
+          pinCode: existingOrder?.pinCode,
+          summary: `${orderNumber || orderId}: ${labelMap[nextStatus]}`,
+          payload: { nextStatus },
+        }),
       };
     });
     if (existingOrder) {
@@ -2418,86 +2875,137 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const earnedPoints = Math.max(25, Math.round(totalWeight * 5));
 
-    setState((prev) => ({
-      ...prev,
-      orders: prev.orders.map((o) =>
-        o.id === order.id
-          ? {
-              ...o,
-              items: updatedItems,
-              actualTotalWeight: totalWeight,
-              finalAmount,
-              paymentId,
-              status: 'payment_completed',
-              updatedAt: now,
-              timeline: [
-                ...o.timeline,
-                { status: 'weight_verified', label: `Weight verified (${totalWeight} kg)`, timestamp: now, actor: exec?.name || 'Executive' },
-                { status: 'payment_completed', label: `Payment completed (₹${finalAmount} via ${payload.paymentMethod})`, timestamp: now, actor: 'Punarchakra Payouts' },
-              ],
-            }
-          : o
-      ),
-      assignments: prev.assignments.map((a) =>
-        a.orderId === order.id ? { ...a, status: 'completed' } : a
-      ),
-      weighingRecords: [newWeighing, ...prev.weighingRecords],
-      payments: [newPayment, ...prev.payments],
-      executiveProfiles: prev.executiveProfiles.map((ep) =>
-        ep.userId === payload.executiveUserId
-          ? { ...ep, completedPickupsCount: ep.completedPickupsCount + 1, availabilityStatus: 'available' }
-          : ep
-      ),
-      customerProfiles: prev.customerProfiles.map((cp) =>
-        cp.userId === order.customerUserId
-          ? {
-              ...cp,
-              loyaltyPoints: cp.loyaltyPoints + earnedPoints,
-              walletBalance:
-                payload.paymentMethod === 'Punarchakra Wallet'
-                  ? cp.walletBalance + finalAmount
-                  : cp.walletBalance,
-              updatedAt: now,
-            }
-          : cp
-      ),
-      rewardTransactions:
-        order.customerRole === 'b2c'
-          ? [
-              {
-                id: `rw-${Date.now()}`,
-                userId: order.customerUserId,
-                points: earnedPoints,
-                type: 'earned',
-                description: `Completed pickup ${order.orderNumber} (${totalWeight} kg recycled)`,
-                createdAt: now,
-              },
-              ...prev.rewardTransactions,
-            ]
-          : prev.rewardTransactions,
-      notifications: [
-        {
-          id: `notif-${Date.now()}-cust`,
-          userId: order.customerUserId,
-          channel: 'in_app',
-          title: `Pickup Completed & Paid: ₹${finalAmount}`,
-          message: `Order ${order.orderNumber} (${totalWeight} kg) verified. Receipt ${receiptNumber} is ready.`,
-          type: 'payment',
-          relatedId: order.id,
-          isRead: false,
-          createdAt: now,
+    setState((prev) => {
+      const nextLedgerAfterSold = appendDriveLedger(prev, {
+        eventType: 'SCRAP_SOLD',
+        actorUserId: payload.executiveUserId,
+        actorName: exec?.name || 'Pickup Executive',
+        actorRole: 'executive',
+        actorEmail: exec?.email,
+        entityType: 'WeighingRecord',
+        entityId: newWeighing.id,
+        referenceCode: order.orderNumber,
+        summary: `Scrap sold & OTP verified for ${order.orderNumber} (${order.customerName}): ${totalWeight} kg = ₹${finalAmount}`,
+        weightKg: totalWeight,
+        amountInr: finalAmount,
+        city: order.city,
+        pinCode: order.pinCode,
+        payload: {
+          customerName: order.customerName,
+          customerUserId: order.customerUserId,
+          customerRole: order.customerRole,
+          customerOtpVerified: true,
+          itemsWeighed: newWeighing.items,
+          notes: payload.notes || '',
         },
-        ...prev.notifications,
-      ],
-      auditLogs: appendAudit(
-        prev,
-        exec || { id: payload.executiveUserId, name: 'Executive', role: 'executive' },
-        'PICKUP_COMPLETED',
-        'PickupOrder',
-        order.id,
-        `Verified ${totalWeight} kg, paid ₹${finalAmount} (${receiptNumber})`
-      ),
-    }));
+      });
+      const prevWithSold = { ...prev, driveLedger: nextLedgerAfterSold };
+      const nextLedgerWithPayment = appendDriveLedger(prevWithSold, {
+        eventType: 'PAYMENT_COMPLETED',
+        actorUserId: payload.executiveUserId,
+        actorName: exec?.name || 'Pickup Executive',
+        actorRole: 'executive',
+        actorEmail: exec?.email,
+        entityType: 'Payment',
+        entityId: paymentId,
+        referenceCode: receiptNumber,
+        summary: `Settled ₹${finalAmount} via ${payload.paymentMethod} to ${order.customerName} (Ref: ${newPayment.transactionRef})`,
+        amountInr: finalAmount,
+        weightKg: totalWeight,
+        city: order.city,
+        pinCode: order.pinCode,
+        payload: {
+          receiptNumber,
+          orderNumber: order.orderNumber,
+          customerUserId: order.customerUserId,
+          customerName: order.customerName,
+          method: payload.paymentMethod,
+          platformFeeInr: platformFee,
+          transactionRef: newPayment.transactionRef,
+        },
+      });
+      return {
+        ...prev,
+        orders: prev.orders.map((o) =>
+          o.id === order.id
+            ? {
+                ...o,
+                items: updatedItems,
+                actualTotalWeight: totalWeight,
+                finalAmount,
+                paymentId,
+                status: 'payment_completed',
+                updatedAt: now,
+                timeline: [
+                  ...o.timeline,
+                  { status: 'weight_verified', label: `Weight verified (${totalWeight} kg)`, timestamp: now, actor: exec?.name || 'Executive' },
+                  { status: 'payment_completed', label: `Payment completed (₹${finalAmount} via ${payload.paymentMethod})`, timestamp: now, actor: 'Punarchakra Payouts' },
+                ],
+              }
+            : o
+        ),
+        assignments: prev.assignments.map((a) =>
+          a.orderId === order.id ? { ...a, status: 'completed' } : a
+        ),
+        weighingRecords: [newWeighing, ...prev.weighingRecords],
+        payments: [newPayment, ...prev.payments],
+        executiveProfiles: prev.executiveProfiles.map((ep) =>
+          ep.userId === payload.executiveUserId
+            ? { ...ep, completedPickupsCount: ep.completedPickupsCount + 1, availabilityStatus: 'available' }
+            : ep
+        ),
+        customerProfiles: prev.customerProfiles.map((cp) =>
+          cp.userId === order.customerUserId
+            ? {
+                ...cp,
+                loyaltyPoints: cp.loyaltyPoints + earnedPoints,
+                walletBalance:
+                  payload.paymentMethod === 'Punarchakra Wallet'
+                    ? cp.walletBalance + finalAmount
+                    : cp.walletBalance,
+                updatedAt: now,
+              }
+            : cp
+        ),
+        rewardTransactions:
+          order.customerRole === 'b2c'
+            ? [
+                {
+                  id: `rw-${Date.now()}`,
+                  userId: order.customerUserId,
+                  points: earnedPoints,
+                  type: 'earned',
+                  description: `Completed pickup ${order.orderNumber} (${totalWeight} kg recycled)`,
+                  createdAt: now,
+                },
+                ...prev.rewardTransactions,
+              ]
+            : prev.rewardTransactions,
+        notifications: [
+          {
+            id: `notif-${Date.now()}-cust`,
+            userId: order.customerUserId,
+            channel: 'in_app',
+            title: `Pickup Completed & Paid: ₹${finalAmount}`,
+            message: `Order ${order.orderNumber} (${totalWeight} kg) verified. Receipt ${receiptNumber} is ready.`,
+            type: 'payment',
+            relatedId: order.id,
+            isRead: false,
+            createdAt: now,
+          },
+          ...prev.notifications,
+        ],
+        auditLogs: appendAudit(
+          prev,
+          exec || { id: payload.executiveUserId, name: 'Executive', role: 'executive' },
+          'PICKUP_COMPLETED',
+          'PickupOrder',
+          order.id,
+          `Verified ${totalWeight} kg, paid ₹${finalAmount} (${receiptNumber})`
+        ),
+        driveLedger: nextLedgerWithPayment,
+      };
+    });
 
     if (firebaseIdTokenRef.current) {
       postToApi('/api/orders', {
@@ -2562,6 +3070,17 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         ...prev,
         users: [newUser, ...prev.users],
         auditLogs: appendAudit(prev, actor, 'ADMIN_USER_CREATED', 'User', id, `Created ${payload.role.toUpperCase()} user ${newUser.name}`),
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'ADMIN_USER_MUTATION',
+          actorUserId: actor.id,
+          actorName: actor.name,
+          actorRole: 'admin',
+          entityType: 'User',
+          entityId: id,
+          referenceCode: 'ADMIN-CREATE-USER',
+          summary: `Admin provisioned ${payload.role.toUpperCase()} account: ${newUser.name} (${cleanEmail})`,
+          payload: { targetRole: payload.role, mobile: payload.mobile },
+        }),
       };
       if (payload.role === 'executive') {
         next.executiveProfiles = [
@@ -2671,6 +3190,17 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           userId,
           `Updated ${target.role.toUpperCase()} profile for ${updatedUser.name} (${cleanEmail})`
         ),
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'ADMIN_USER_MUTATION',
+          actorUserId: actor.id,
+          actorName: actor.name,
+          actorRole: 'admin',
+          entityType: 'User',
+          entityId: userId,
+          referenceCode: 'ADMIN-UPDATE-USER',
+          summary: `Admin updated ${target.role.toUpperCase()} profile: ${updatedUser.name} (${cleanEmail})`,
+          payload: { targetUserId: userId, status: updatedUser.status },
+        }),
       };
 
       if (target.role === 'b2c') {
@@ -2860,6 +3390,17 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         targetUserId,
         `Deleted ${target.role.toUpperCase()} profile ${target.name} (${target.email})`
       ),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'ADMIN_USER_MUTATION',
+        actorUserId: actor.id,
+        actorName: actor.name,
+        actorRole: 'admin',
+        entityType: 'User',
+        entityId: targetUserId,
+        referenceCode: 'ADMIN-DELETE-USER',
+        summary: `Admin deleted ${target.role.toUpperCase()} profile: ${target.name} (${target.email})`,
+        payload: { targetUserId, targetRole: target.role },
+      }),
     }));
 
     if (firebaseIdTokenRef.current) {
@@ -2968,6 +3509,18 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ...prev.notifications,
         ],
         auditLogs: appendAudit(prev, actor, 'EXECUTIVE_ASSIGNED', 'PickupOrder', orderId, `Assigned ${exec.name}`),
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'EXECUTIVE_ASSIGNED',
+          actorUserId: actor.id,
+          actorName: actor.name,
+          actorRole: 'admin',
+          entityType: 'PickupOrder',
+          entityId: orderId,
+          referenceCode: order?.orderNumber || orderId,
+          pinCode: order?.pinCode,
+          summary: `Assigned executive ${exec.name} to order ${order?.orderNumber || orderId}`,
+          payload: { executiveUserId, executiveName: exec.name, customerName: order?.customerName },
+        }),
       };
     });
     const assignedOrder = state.orders.find((o) => o.id === orderId);
@@ -3091,6 +3644,19 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
           payload.categoryId,
           `${payload.customerType.toUpperCase()} rate in ${payload.city} set to ₹${payload.ratePerUnit} (${payload.note})`
         ),
+        driveLedger: appendDriveLedger(prev, {
+          eventType: 'RATE_OR_CMS_UPDATE',
+          actorUserId: actor.id,
+          actorName: actor.name,
+          actorRole: 'admin',
+          entityType: 'ScrapRate',
+          entityId: payload.categoryId,
+          referenceCode: `${payload.categoryId}-${payload.customerType}`,
+          amountInr: payload.ratePerUnit,
+          city: payload.city,
+          summary: `Published ${payload.customerType.toUpperCase()} rate for ${payload.categoryId}: ₹${payload.ratePerUnit}/unit`,
+          payload: { qualityGrade: payload.qualityGrade, note: payload.note },
+        }),
       };
     });
     if (firebaseIdTokenRef.current) {
@@ -3163,10 +3729,23 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const adminUpdatePaymentStatus: ContextValue['adminUpdatePaymentStatus'] = (paymentId, status) => {
     const actor = currentUser || { id: 'usr-admin-1', name: 'Admin', role: 'admin' as UserRole };
+    const payment = state.payments.find((p) => p.id === paymentId);
     setState((prev) => ({
       ...prev,
       payments: prev.payments.map((p) => (p.id === paymentId ? { ...p, status } : p)),
       auditLogs: appendAudit(prev, actor, 'PAYMENT_UPDATED', 'Payment', paymentId, `Status changed to ${status}`),
+      driveLedger: appendDriveLedger(prev, {
+        eventType: 'PAYMENT_UPDATED',
+        actorUserId: actor.id,
+        actorName: actor.name,
+        actorRole: 'admin',
+        entityType: 'Payment',
+        entityId: paymentId,
+        referenceCode: payment?.receiptNumber || paymentId,
+        amountInr: payment?.amount,
+        summary: `Admin updated payment ${payment?.receiptNumber || paymentId} status to ${status}`,
+        payload: { status, orderNumber: payment?.orderNumber },
+      }),
     }));
     notify('success', `Payment marked ${status}`);
   };
@@ -3203,6 +3782,250 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
     localStorage.removeItem(STORAGE_KEY);
     setState(initialSeedState);
     notify('info', 'Workspace restored to default Punarchakra seed data');
+  };
+
+  // --- Admin-Only Google Drive Vault Operations (View, Edit, Delete, Sync) ---
+  const ensureDriveSessionReady = (): { token: string } => {
+    assertAdminDriveAccess(currentUser?.role);
+    const token = getDriveAccessToken();
+    if (!token) {
+      throw new Error('Google Drive session is not connected. Click "Connect Google Drive" first.');
+    }
+    return { token };
+  };
+
+  const syncAllLedgerToGoogleDrive = async (
+    recordsOverride?: DriveLedgerRecord[]
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      assertAdminDriveAccess(currentUser?.role);
+      const token = getDriveAccessToken();
+      if (!token) {
+        return { ok: false, error: 'Connect Google Drive first to sync audit ledger files.' };
+      }
+      setDriveSyncing(true);
+      const folderId = driveFolderId || (await ensurePunarchakraVaultFolder(token, currentUser?.role));
+      setDriveFolderId(folderId);
+      const existing = await listDriveVaultFiles(token, folderId, currentUser?.role);
+
+      const records = recordsOverride || state.driveLedger;
+      const targets = [
+        {
+          fileName: 'punarchakra_master_ledger.json',
+          mimeType: 'application/json',
+          content: buildMasterLedgerJson(records),
+          categoryTag: 'master_ledger',
+        },
+        {
+          fileName: 'punarchakra_scrap_sold_and_payments.csv',
+          mimeType: 'text/csv',
+          content: buildScrapSalesAndPaymentsCsv(records),
+          categoryTag: 'scrap_sales_payments',
+        },
+        {
+          fileName: 'punarchakra_login_activity.csv',
+          mimeType: 'text/csv',
+          content: buildLoginAuditCsv(records),
+          categoryTag: 'login_audit',
+        },
+      ];
+
+      for (const target of targets) {
+        const match = existing.find((f) => f.name === target.fileName);
+        await upsertDriveVaultFile({
+          accessToken: token,
+          folderId,
+          fileName: target.fileName,
+          mimeType: target.mimeType,
+          content: target.content,
+          existingFileId: match?.id,
+          role: currentUser?.role,
+          categoryTag: target.categoryTag,
+        });
+      }
+
+      const refreshed = await listDriveVaultFiles(token, folderId, currentUser?.role);
+      setDriveFiles(refreshed);
+      const now = new Date().toISOString();
+      setLastDriveSyncAt(now);
+      const masterId = refreshed.find((f) => f.name === 'punarchakra_master_ledger.json')?.id;
+      setState((prev) => ({
+        ...prev,
+        driveLedger: (recordsOverride || prev.driveLedger).map((r) => ({
+          ...r,
+          driveSyncStatus: 'synced_drive',
+          driveFileId: masterId || r.driveFileId,
+        })),
+      }));
+      notify('success', 'Synced to Google Drive Vault', `${records.length} lifecycle records written to Punarchakra Admin Audit Vault.`);
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Google Drive sync failed.';
+      notify('error', 'Google Drive Sync Failed', message);
+      return { ok: false, error: message };
+    } finally {
+      setDriveSyncing(false);
+    }
+  };
+
+  const connectAdminGoogleDrive = async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      assertAdminDriveAccess(currentUser?.role);
+      const res = await runWithLoading('Connecting Admin Google Drive Vault...', async () =>
+        signInAdminGoogleDrivePopup()
+      );
+      setDriveConnectedEmail(res.email || getDriveConnectedEmail() || res.user.email || 'Admin Google Account');
+      const folderId = await ensurePunarchakraVaultFolder(res.accessToken, currentUser?.role);
+      setDriveFolderId(folderId);
+      const files = await listDriveVaultFiles(res.accessToken, folderId, currentUser?.role);
+      setDriveFiles(files);
+      await syncAllLedgerToGoogleDrive();
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Google Drive connection was cancelled.';
+      notify('error', 'Google Drive Connection Error', message);
+      return { ok: false, error: message };
+    }
+  };
+
+  const disconnectAdminGoogleDrive = () => {
+    clearDriveAccessToken();
+    setDriveConnectedEmail(null);
+    setDriveFolderId(null);
+    setDriveFiles([]);
+    notify('info', 'Google Drive disconnected from this browser session');
+  };
+
+  const refreshDriveFiles = async () => {
+    try {
+      const { token } = ensureDriveSessionReady();
+      const folderId = driveFolderId || (await ensurePunarchakraVaultFolder(token, currentUser?.role));
+      setDriveFolderId(folderId);
+      const files = await listDriveVaultFiles(token, folderId, currentUser?.role);
+      setDriveFiles(files);
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Unable to refresh Drive folder');
+    }
+  };
+
+  const readDriveFile = async (fileId: string): Promise<string> => {
+    const { token } = ensureDriveSessionReady();
+    return await readDriveVaultFileContent(token, fileId, currentUser?.role);
+  };
+
+  const adminEditDriveFile: ContextValue['adminEditDriveFile'] = async ({ fileId, fileName, mimeType, content }) => {
+    try {
+      const { token } = ensureDriveSessionReady();
+      const folderId = driveFolderId || (await ensurePunarchakraVaultFolder(token, currentUser?.role));
+      await upsertDriveVaultFile({
+        accessToken: token,
+        folderId,
+        fileName,
+        mimeType,
+        content,
+        existingFileId: fileId,
+        role: currentUser?.role,
+      });
+      const files = await listDriveVaultFiles(token, folderId, currentUser?.role);
+      setDriveFiles(files);
+      setLastDriveSyncAt(new Date().toISOString());
+      notify('success', `Updated Drive file: ${fileName}`);
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to update Google Drive file.';
+      notify('error', 'Drive Update Failed', message);
+      return { ok: false, error: message };
+    }
+  };
+
+  const adminDeleteDriveFile = async (fileId: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const { token } = ensureDriveSessionReady();
+      await deleteDriveVaultFile(token, fileId, currentUser?.role);
+      setDriveFiles((prev) => prev.filter((f) => f.id !== fileId));
+      notify('info', 'File deleted permanently from Google Drive Vault');
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete Google Drive file.';
+      notify('error', 'Drive Delete Failed', message);
+      return { ok: false, error: message };
+    }
+  };
+
+  const adminEditLedgerRecord: ContextValue['adminEditLedgerRecord'] = async (entryId, updates) => {
+    if (currentUser?.role !== 'admin') {
+      const msg = 'Restricted: Only Administrator can edit captured ledger data.';
+      notify('error', msg);
+      return { ok: false, error: msg };
+    }
+    const now = new Date().toISOString();
+    let updatedLedger: DriveLedgerRecord[] = [];
+    setState((prev) => {
+      updatedLedger = prev.driveLedger.map((r) =>
+        r.id === entryId
+          ? {
+              ...r,
+              ...updates,
+              lastEditedBy: currentUser.name,
+              lastEditedAt: now,
+              driveSyncStatus: 'local_only' as const,
+            }
+          : r
+      );
+      return {
+        ...prev,
+        driveLedger: updatedLedger,
+        auditLogs: appendAudit(
+          prev,
+          currentUser,
+          'ADMIN_LEDGER_EDITED',
+          'DriveLedgerRecord',
+          entryId,
+          `Edited captured lifecycle record ${entryId}`
+        ),
+      };
+    });
+    const edited = updatedLedger.find((r) => r.id === entryId);
+    if (edited && auth.currentUser?.emailVerified) {
+      mirrorLedgerEntryToFirestore(edited);
+    }
+    if (getDriveAccessToken() && driveFolderId) {
+      await syncAllLedgerToGoogleDrive(updatedLedger);
+    }
+    notify('success', 'Captured ledger record updated');
+    return { ok: true };
+  };
+
+  const adminDeleteLedgerRecord = async (entryId: string): Promise<{ ok: boolean; error?: string }> => {
+    if (currentUser?.role !== 'admin') {
+      const msg = 'Restricted: Only Administrator can delete captured ledger data.';
+      notify('error', msg);
+      return { ok: false, error: msg };
+    }
+    let nextLedger: DriveLedgerRecord[] = [];
+    setState((prev) => {
+      nextLedger = prev.driveLedger.filter((r) => r.id !== entryId);
+      return {
+        ...prev,
+        driveLedger: nextLedger,
+        auditLogs: appendAudit(
+          prev,
+          currentUser,
+          'ADMIN_LEDGER_DELETED',
+          'DriveLedgerRecord',
+          entryId,
+          `Deleted captured lifecycle record ${entryId}`
+        ),
+      };
+    });
+    if (auth.currentUser) {
+      deleteDocumentFromFirestore('adminLedger', entryId).catch(() => {});
+    }
+    if (getDriveAccessToken() && driveFolderId) {
+      await syncAllLedgerToGoogleDrive(nextLedger);
+    }
+    notify('info', 'Captured ledger record deleted');
+    return { ok: true };
   };
 
   return (
@@ -3294,6 +4117,20 @@ export const PunarchakraProvider: React.FC<{ children: React.ReactNode }> = ({ c
         adminUpdateCms,
         adminAddCoupon,
         resetDemoWorkspace,
+        driveConnectedEmail,
+        driveFolderId,
+        driveFiles,
+        driveSyncing,
+        lastDriveSyncAt,
+        connectAdminGoogleDrive,
+        disconnectAdminGoogleDrive,
+        syncAllLedgerToGoogleDrive,
+        refreshDriveFiles,
+        readDriveFile,
+        adminEditDriveFile,
+        adminDeleteDriveFile,
+        adminEditLedgerRecord,
+        adminDeleteLedgerRecord,
       }}
     >
       {children}

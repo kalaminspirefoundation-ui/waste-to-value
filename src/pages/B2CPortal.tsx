@@ -43,9 +43,15 @@ import {
   StatusIndicator,
   Textarea,
 } from '../components/ui/Primitives';
-import { AccessibilityTriggerButton } from '../components/ui/AccessibilityToolbar';
+import { PortalFooter, PortalSwitcherDropdown } from '../components/ui/PortalSwitcherDropdown';
 import { PushAlertsCard } from '../components/ui/PushAlertsCard';
 import { ReceiptModal } from '../components/ui/ReceiptModal';
+import {
+  BengaluruPinPickerMap,
+  BengaluruRouteMap,
+  PUNARCHAKRA_HQ,
+  resolveOrderCoordinates,
+} from '../components/maps/BengaluruServiceMap';
 
 type B2CTab =
   | 'dashboard'
@@ -450,7 +456,7 @@ export const B2CPortal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <AccessibilityTriggerButton compact />
+            <PortalSwitcherDropdown compact />
             <Button variant="outline" size="sm" onClick={() => navigateTo('public')}>
               Public Site
             </Button>
@@ -1127,6 +1133,25 @@ export const B2CPortal: React.FC = () => {
                     </div>
                   </Card>
 
+                  <BengaluruRouteMap
+                    origin={
+                      trackedOrder.assignedExecutiveId
+                        ? state.executiveProfiles.find((ep) => ep.userId === trackedOrder.assignedExecutiveId)
+                            ?.activeShiftGps || { lat: PUNARCHAKRA_HQ.lat, lng: PUNARCHAKRA_HQ.lng }
+                        : { lat: PUNARCHAKRA_HQ.lat, lng: PUNARCHAKRA_HQ.lng }
+                    }
+                    destination={resolveOrderCoordinates(
+                      trackedOrder.lat,
+                      trackedOrder.lng,
+                      trackedOrder.pinCode,
+                      trackedOrder.zoneId
+                    )}
+                    originLabel={trackedOrder.assignedExecutiveName || 'Punarchakra EV Hub'}
+                    destinationLabel={`Pickup · ${trackedOrder.pinCode}`}
+                    destinationAddress={trackedOrder.addressText}
+                    heightClass="h-[280px]"
+                  />
+
                   <Card padding="md">
                     <h3 className="font-display font-bold text-base text-[#174B37] mb-3">Activity Timeline</h3>
                     <div className="space-y-3">
@@ -1501,6 +1526,7 @@ export const B2CPortal: React.FC = () => {
             </div>
           )}
         </main>
+        <PortalFooter portalLabel="B2C Customer Portal" withMobileBottomBarSpace />
       </div>
 
       {/* Mobile Bottom Tab Bar (Thumb Zone, <=15% height) */}
@@ -1561,6 +1587,18 @@ export const B2CPortal: React.FC = () => {
               onChange={(e) => setNewAddrForm((f) => ({ ...f, pinCode: e.target.value.replace(/\D/g, '') }))}
             />
           </div>
+          <BengaluruPinPickerMap
+            lat={newAddrForm.lat}
+            lng={newAddrForm.lng}
+            onSelectLocation={({ lat, lng, pinCode }) =>
+              setNewAddrForm((f) => ({
+                ...f,
+                lat,
+                lng,
+                pinCode: pinCode || f.pinCode,
+              }))
+            }
+          />
           <div className="flex items-center justify-between p-3 rounded-xl bg-[#F7F9F6]">
             <span className="text-xs text-[#202820]/70">
               {newAddrForm.lat ? `GPS: ${newAddrForm.lat}, ${newAddrForm.lng}` : 'Optional: Attach GPS coordinates'}

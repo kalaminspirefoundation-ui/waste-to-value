@@ -4,15 +4,20 @@ import {
   BarChart3,
   Bell,
   Building2,
+  Cloud,
   CreditCard,
   Download,
+  ExternalLink,
+  Eye,
   FileText,
   Globe,
+  HardDrive,
   HelpCircle,
   IndianRupee,
   LayoutDashboard,
   Layers,
   Leaf,
+  Lock,
   LogOut,
   MapPin,
   Menu,
@@ -34,6 +39,9 @@ import {
 import { usePunarchakra } from '../context/PunarchakraContext';
 import {
   BusinessProfile,
+  DriveLedgerEventType,
+  DriveLedgerRecord,
+  DriveVaultFile,
   ExecutiveProfile,
   Payment,
   PickupOrder,
@@ -44,12 +52,13 @@ import {
 } from '../types/punarchakra';
 import { DonutBreakdownChart, SimpleBarChart } from '../components/ui/Charts';
 import { DataTable } from '../components/ui/DataTable';
-import { AccessibilityTriggerButton } from '../components/ui/AccessibilityToolbar';
+import { PortalFooter, PortalSwitcherDropdown } from '../components/ui/PortalSwitcherDropdown';
 import {
   AppLogo,
   Button,
   Card,
   ConfirmDialog,
+  EmptyState,
   Input,
   LanguageToggleButton,
   Modal,
@@ -79,6 +88,7 @@ type AdminTab =
   | 'cms'
   | 'service_areas'
   | 'tickets'
+  | 'drive_vault'
   | 'audit_logs'
   | 'settings';
 
@@ -116,6 +126,20 @@ export const AdminPortal: React.FC = () => {
     lastRatesSyncAt,
     ratesSyncSource,
     syncLiveRatesOnline,
+    driveConnectedEmail,
+    driveFolderId,
+    driveFiles,
+    driveSyncing,
+    lastDriveSyncAt,
+    connectAdminGoogleDrive,
+    disconnectAdminGoogleDrive,
+    syncAllLedgerToGoogleDrive,
+    refreshDriveFiles,
+    readDriveFile,
+    adminEditDriveFile,
+    adminDeleteDriveFile,
+    adminEditLedgerRecord,
+    adminDeleteLedgerRecord,
   } = usePunarchakra();
 
   const [tab, setTab] = useState<AdminTab>('dashboard');
@@ -238,6 +262,27 @@ export const AdminPortal: React.FC = () => {
   // Support ticket reply
   const [replyTicket, setReplyTicket] = useState<SupportTicket | null>(null);
   const [replyText, setReplyText] = useState('');
+
+  // Admin-Only Google Drive Vault State
+  const [ledgerFilter, setLedgerFilter] = useState<'all' | 'logins' | 'bookings' | 'scrap_sold' | 'payments' | 'quotations_admin'>('all');
+  const [viewLedgerRecord, setViewLedgerRecord] = useState<DriveLedgerRecord | null>(null);
+  const [editingLedgerRecord, setEditingLedgerRecord] = useState<DriveLedgerRecord | null>(null);
+  const [editLedgerDraft, setEditLedgerDraft] = useState({
+    summary: '',
+    referenceCode: '',
+    weightKg: '',
+    amountInr: '',
+    city: 'Bengaluru',
+    pinCode: '',
+  });
+  const [confirmSaveLedgerEdit, setConfirmSaveLedgerEdit] = useState(false);
+  const [confirmDeleteLedger, setConfirmDeleteLedger] = useState<DriveLedgerRecord | null>(null);
+
+  const [driveFileBusyId, setDriveFileBusyId] = useState<string | null>(null);
+  const [viewDriveFileModal, setViewDriveFileModal] = useState<{ file: DriveVaultFile; content: string } | null>(null);
+  const [editDriveFileModal, setEditDriveFileModal] = useState<{ file: DriveVaultFile; fileName: string; content: string } | null>(null);
+  const [confirmSaveDriveFileEdit, setConfirmSaveDriveFileEdit] = useState(false);
+  const [confirmDeleteDriveFileModal, setConfirmDeleteDriveFileModal] = useState<DriveVaultFile | null>(null);
 
   if (!currentUser) return null;
 
@@ -373,6 +418,7 @@ export const AdminPortal: React.FC = () => {
     {
       group: 'Platform & Governance',
       items: [
+        { id: 'drive_vault', label: 'Google Drive Vault', Icon: HardDrive },
         { id: 'service_areas', label: 'Service Areas', Icon: MapPin },
         { id: 'cms', label: 'Website CMS', Icon: Globe },
         { id: 'notifications', label: 'Notifications', Icon: Bell },
@@ -470,7 +516,7 @@ export const AdminPortal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <AccessibilityTriggerButton compact />
+            <PortalSwitcherDropdown compact />
             <LanguageToggleButton language={language} onToggle={toggleLanguage} />
             <Button variant="outline" size="sm" onClick={() => navigateTo('public')}>
               Public Site
@@ -1299,7 +1345,404 @@ export const AdminPortal: React.FC = () => {
             </Card>
           )}
 
-          {/* 21. AUDIT LOGS */}
+          {/* 21. GOOGLE DRIVE VAULT (ADMIN-ONLY VIEW, EDIT, DELETE) */}
+          {tab === 'drive_vault' && currentUser.role === 'admin' && (
+            <div className="space-y-6">
+              {/* Connection & RBAC Guard Banner */}
+              <Card padding="lg" className="border-[#174B37]/20">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <div className="inline-flex items-center gap-2 text-xs font-semibold text-[#174B37] bg-[#A5D66D]/25 px-2.5 py-1 rounded-md">
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>Strict Admin-Only Google Drive Vault</span>
+                    </div>
+                    <h2 className="font-display font-bold text-xl text-[#174B37]">
+                      Punarchakra End-to-End Lifecycle Vault (Login → Scrap Sold → Payment)
+                    </h2>
+                    <p className="text-xs text-[#202820]/70 max-w-3xl">
+                      Every authentication session, pickup booking, digital weighing record, scrap sale, payment receipt, quotation, and admin change is captured into the master ledger and stored inside your Google Drive folder{' '}
+                      <span className="font-mono font-semibold text-[#174B37]">Punarchakra Admin Audit Vault</span>. Only authenticated Administrators can view, edit, or delete Drive records.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                    {!driveConnectedEmail ? (
+                      <button
+                        type="button"
+                        onClick={connectAdminGoogleDrive}
+                        disabled={driveSyncing || isLoading}
+                        className="inline-flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-[#202820]/20 bg-white text-sm font-semibold text-[#202820] hover:bg-[#F7F9F6] shadow-xs cursor-pointer transition-colors"
+                      >
+                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            fill="#4285F4"
+                            d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.37 24 12 24Z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                          />
+                          <path
+                            fill="#EA4335"
+                            d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.37 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                          />
+                        </svg>
+                        <span>Connect Google Drive</span>
+                      </button>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() => syncAllLedgerToGoogleDrive()}
+                          disabled={driveSyncing}
+                        >
+                          <RefreshCw className={`w-4 h-4 ${driveSyncing ? 'animate-spin' : ''}`} />
+                          {driveSyncing ? 'Syncing Drive...' : 'Sync All to Drive'}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={refreshDriveFiles} disabled={driveSyncing}>
+                          Refresh Files
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={disconnectAdminGoogleDrive}>
+                          Disconnect
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-4 border-t border-[#202820]/10 grid sm:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-[#F7F9F6]">
+                    <span className="text-[#202820]/60">Drive OAuth Status</span>
+                    <p className="font-semibold text-[#174B37] mt-0.5 truncate">
+                      {driveConnectedEmail ? `Connected (${driveConnectedEmail})` : 'Not Connected (In-Memory Token)'}
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#F7F9F6]">
+                    <span className="text-[#202820]/60">Captured Lifecycle Events</span>
+                    <p className="font-display text-lg font-bold text-[#174B37] mt-0.5 tabular-nums">
+                      {state.driveLedger.length} events
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#F7F9F6]">
+                    <span className="text-[#202820]/60">Scrap Sold & Settled</span>
+                    <p className="font-display text-lg font-bold text-[#28A66A] mt-0.5 tabular-nums">
+                      {state.driveLedger.filter((r) => r.eventType === 'SCRAP_SOLD').length} sales · ₹
+                      {Math.round(
+                        state.driveLedger
+                          .filter((r) => r.eventType === 'PAYMENT_COMPLETED')
+                          .reduce((s, r) => s + (r.amountInr || 0), 0)
+                      ).toLocaleString('en-IN')}
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#F7F9F6]">
+                    <span className="text-[#202820]/60">Last Google Drive Sync</span>
+                    <p className="font-mono text-xs font-semibold text-[#174B37] mt-1">
+                      {lastDriveSyncAt ? new Date(lastDriveSyncAt).toLocaleString('en-IN') : 'Awaiting Drive sync'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Google Drive Vault Files (Live Drive API v3 CRUD) */}
+              <Card padding="md">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <div>
+                    <h3 className="font-display font-bold text-base text-[#174B37] flex items-center gap-2">
+                      <Cloud className="w-4 h-4 text-[#28A66A]" />
+                      <span>Google Drive Vault Files ({driveFiles.length})</span>
+                    </h3>
+                    <p className="text-xs text-[#202820]/60">
+                      Files inside your Google Drive folder <span className="font-mono">Punarchakra Admin Audit Vault</span>. All edits & deletions require Admin confirmation.
+                    </p>
+                  </div>
+                </div>
+
+                {!driveConnectedEmail ? (
+                  <EmptyState
+                    title="Connect Google Drive to Manage Vault Files"
+                    description="Click 'Connect Google Drive' above to create or open your Punarchakra Admin Audit Vault folder and view, edit, or delete synced JSON & CSV ledger files."
+                  />
+                ) : driveFiles.length === 0 ? (
+                  <EmptyState
+                    title="Vault Folder Empty"
+                    description="Click 'Sync All to Drive' to write punarchakra_master_ledger.json, punarchakra_scrap_sold_and_payments.csv, and punarchakra_login_activity.csv."
+                  />
+                ) : (
+                  <DataTable
+                    data={driveFiles}
+                    columns={[
+                      {
+                        key: 'name',
+                        header: 'Drive File Name',
+                        render: (f) => (
+                          <div>
+                            <p className="font-semibold text-xs text-[#174B37]">{f.name}</p>
+                            <p className="text-[11px] text-[#202820]/55">{f.kindLabel || f.mimeType}</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'size',
+                        header: 'Size',
+                        render: (f) => (
+                          <span className="font-mono text-xs tabular-nums">
+                            {f.size ? `${Math.max(1, Math.round(Number(f.size) / 1024))} KB` : '—'}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: 'mod',
+                        header: 'Last Modified',
+                        render: (f) => (
+                          <span className="font-mono text-xs">
+                            {f.modifiedTime ? new Date(f.modifiedTime).toLocaleString('en-IN') : '—'}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: 'act',
+                        header: 'Admin Controls',
+                        align: 'right',
+                        render: (f) => (
+                          <div className="inline-flex items-center gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={driveFileBusyId === f.id}
+                              onClick={async () => {
+                                try {
+                                  setDriveFileBusyId(f.id);
+                                  const content = await readDriveFile(f.id);
+                                  setViewDriveFileModal({ file: f, content });
+                                } catch (err) {
+                                  notify('error', err instanceof Error ? err.message : 'Unable to read Drive file');
+                                } finally {
+                                  setDriveFileBusyId(null);
+                                }
+                              }}
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              View
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={driveFileBusyId === f.id}
+                              onClick={async () => {
+                                try {
+                                  setDriveFileBusyId(f.id);
+                                  const content = await readDriveFile(f.id);
+                                  setEditDriveFileModal({ file: f, fileName: f.name, content });
+                                } catch (err) {
+                                  notify('error', err instanceof Error ? err.message : 'Unable to load Drive file');
+                                } finally {
+                                  setDriveFileBusyId(null);
+                                }
+                              }}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                              Edit
+                            </Button>
+                            {f.webViewLink && (
+                              <a
+                                href={f.webViewLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-[#202820]/15 text-xs font-semibold text-[#174B37] hover:bg-[#F7F9F6]"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => setConfirmDeleteDriveFileModal(f)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete
+                            </Button>
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
+                )}
+              </Card>
+
+              {/* Captured End-to-End Lifecycle Ledger Table */}
+              <Card padding="md" className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-display font-bold text-base text-[#174B37]">
+                      Captured Activity & Transaction Ledger
+                    </h3>
+                    <p className="text-xs text-[#202820]/60">
+                      Every user login, booking, weighing, scrap sold, payment, quotation, and admin action recorded in real time.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(
+                      [
+                        { id: 'all', label: 'All Events' },
+                        { id: 'logins', label: 'Logins & Auth' },
+                        { id: 'bookings', label: 'Bookings & Dispatch' },
+                        { id: 'scrap_sold', label: 'Scrap Sold' },
+                        { id: 'payments', label: 'Payments' },
+                        { id: 'quotations_admin', label: 'Quotes & Admin' },
+                      ] as const
+                    ).map((chip) => (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        onClick={() => setLedgerFilter(chip.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                          ledgerFilter === chip.id
+                            ? 'bg-[#174B37] text-white border-[#174B37]'
+                            : 'bg-[#F7F9F6] text-[#202820]/75 border-[#202820]/10 hover:border-[#174B37]/30'
+                        }`}
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <DataTable
+                  data={state.driveLedger.filter((r) => {
+                    const matchMap: Record<typeof ledgerFilter, DriveLedgerEventType[] | null> = {
+                      all: null,
+                      logins: ['USER_LOGIN', 'USER_LOGOUT', 'USER_REGISTERED', 'PASSWORD_RESET'],
+                      bookings: ['BOOKING_CREATED', 'EXECUTIVE_ASSIGNED', 'PICKUP_STATUS', 'ORDER_CANCELLED'],
+                      scrap_sold: ['SCRAP_SOLD', 'SCRAP_WEIGHED'],
+                      payments: ['PAYMENT_COMPLETED', 'PAYMENT_UPDATED'],
+                      quotations_admin: ['QUOTATION_ACTIVITY', 'ADMIN_USER_MUTATION', 'RATE_OR_CMS_UPDATE', 'SUPPORT_TICKET'],
+                    };
+                    const allowed = matchMap[ledgerFilter];
+                    return allowed ? allowed.includes(r.eventType) : true;
+                  })}
+                  searchPlaceholder="Search actor, order #, receipt, or summary..."
+                  searchFilter={(r, q) =>
+                    r.actorName.toLowerCase().includes(q) ||
+                    (r.referenceCode || '').toLowerCase().includes(q) ||
+                    r.summary.toLowerCase().includes(q) ||
+                    r.eventType.toLowerCase().includes(q)
+                  }
+                  columns={[
+                    {
+                      key: 'seq',
+                      header: '# / Time',
+                      render: (r) => (
+                        <div>
+                          <span className="font-mono text-xs font-bold text-[#174B37]">#{r.sequenceNo}</span>
+                          <p className="font-mono text-[11px] text-[#202820]/55">
+                            {new Date(r.timestamp).toLocaleString('en-IN')}
+                          </p>
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'evt',
+                      header: 'Event',
+                      render: (r) => (
+                        <div>
+                          <span className="inline-block px-2 py-0.5 rounded-md bg-[#174B37]/10 text-[#174B37] font-mono text-[11px] font-semibold">
+                            {r.eventType}
+                          </span>
+                          {r.referenceCode && (
+                            <p className="font-mono text-[11px] text-[#202820]/65 mt-0.5">{r.referenceCode}</p>
+                          )}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'actor',
+                      header: 'Actor',
+                      render: (r) => (
+                        <div>
+                          <p className="text-xs font-semibold text-[#202820]">{r.actorName}</p>
+                          <p className="text-[11px] text-[#202820]/55 uppercase font-mono">{r.actorRole}</p>
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'metrics',
+                      header: 'Qty / ₹',
+                      render: (r) => (
+                        <div className="font-mono text-xs tabular-nums">
+                          {r.weightKg !== undefined && <p>{r.weightKg} kg</p>}
+                          {r.amountInr !== undefined && (
+                            <p className="font-bold text-[#174B37]">₹{r.amountInr.toLocaleString('en-IN')}</p>
+                          )}
+                          {r.weightKg === undefined && r.amountInr === undefined && (
+                            <span className="text-[#202820]/40">—</span>
+                          )}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'sum',
+                      header: 'Captured Summary',
+                      render: (r) => (
+                        <div className="max-w-xs">
+                          <p className="text-xs text-[#202820]/85">{r.summary}</p>
+                          {r.lastEditedBy && (
+                            <p className="text-[10px] text-[#D97706] mt-0.5">
+                              Edited by {r.lastEditedBy}
+                            </p>
+                          )}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'sync',
+                      header: 'Drive Sync',
+                      render: (r) => (
+                        <StatusIndicator status={r.driveSyncStatus === 'synced_drive' ? 'completed' : 'pending'} />
+                      ),
+                    },
+                    {
+                      key: 'act',
+                      header: 'Admin Actions',
+                      align: 'right',
+                      render: (r) => (
+                        <div className="inline-flex items-center gap-1.5">
+                          <Button size="sm" variant="outline" onClick={() => setViewLedgerRecord(r)}>
+                            View
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingLedgerRecord(r);
+                              setEditLedgerDraft({
+                                summary: r.summary,
+                                referenceCode: r.referenceCode || '',
+                                weightKg: r.weightKg !== undefined ? String(r.weightKg) : '',
+                                amountInr: r.amountInr !== undefined ? String(r.amountInr) : '',
+                                city: r.city || 'Bengaluru',
+                                pinCode: r.pinCode || '',
+                              });
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button size="sm" variant="danger" onClick={() => setConfirmDeleteLedger(r)}>
+                            Delete
+                          </Button>
+                        </div>
+                      ),
+                    },
+                  ]}
+                />
+              </Card>
+            </div>
+          )}
+
+          {/* 22. AUDIT LOGS */}
           {tab === 'audit_logs' && (
             <div className="space-y-6">
               <Card padding="md">
@@ -1331,7 +1774,7 @@ export const AdminPortal: React.FC = () => {
             </div>
           )}
 
-          {/* 22. SETTINGS */}
+          {/* 23. SETTINGS */}
           {tab === 'settings' && (
             <Card padding="lg" className="max-w-xl space-y-4">
               <h2 className="font-display font-bold text-lg text-[#174B37]">Platform Settings & Data Management</h2>
@@ -1344,6 +1787,7 @@ export const AdminPortal: React.FC = () => {
             </Card>
           )}
         </main>
+        <PortalFooter portalLabel="Admin Master Control" />
       </div>
 
       {/* Provision User Modal */}
@@ -1796,6 +2240,219 @@ export const AdminPortal: React.FC = () => {
           </form>
         )}
       </Modal>
+
+      {/* View Captured Lifecycle Record Modal */}
+      <Modal
+        open={viewLedgerRecord !== null}
+        onClose={() => setViewLedgerRecord(null)}
+        title={viewLedgerRecord ? `Captured Event #${viewLedgerRecord.sequenceNo} (${viewLedgerRecord.eventType})` : ''}
+        subtitle={viewLedgerRecord ? `${viewLedgerRecord.actorName} · ${new Date(viewLedgerRecord.timestamp).toLocaleString('en-IN')}` : ''}
+        maxWidth="max-w-2xl"
+      >
+        {viewLedgerRecord && (
+          <div className="space-y-3 text-xs">
+            <div className="grid sm:grid-cols-2 gap-3 p-3 rounded-xl bg-[#F7F9F6]">
+              <p><strong>Reference:</strong> <span className="font-mono">{viewLedgerRecord.referenceCode || viewLedgerRecord.entityId}</span></p>
+              <p><strong>Actor Role:</strong> <span className="font-mono uppercase">{viewLedgerRecord.actorRole}</span></p>
+              <p><strong>City / PIN:</strong> {viewLedgerRecord.city || 'Bengaluru'} {viewLedgerRecord.pinCode || ''}</p>
+              <p><strong>Weight / Amount:</strong> {viewLedgerRecord.weightKg ?? '—'} kg / {viewLedgerRecord.amountInr !== undefined ? `₹${viewLedgerRecord.amountInr.toLocaleString('en-IN')}` : '—'}</p>
+            </div>
+            <div>
+              <p className="font-semibold text-[#174B37] mb-1">Captured Summary</p>
+              <p className="text-[#202820]/80">{viewLedgerRecord.summary}</p>
+            </div>
+            <div>
+              <p className="font-semibold text-[#174B37] mb-1">Full Structured Payload (Synced to Google Drive)</p>
+              <pre className="p-3 rounded-xl bg-[#174B37] text-[#A5D66D] font-mono text-[11px] overflow-x-auto max-h-64">
+                {JSON.stringify(viewLedgerRecord.payload, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Edit Captured Ledger Record Modal -> Triggers Explicit Confirmation */}
+      <Modal
+        open={editingLedgerRecord !== null}
+        onClose={() => setEditingLedgerRecord(null)}
+        title={editingLedgerRecord ? `Edit Ledger Event #${editingLedgerRecord.sequenceNo}` : ''}
+        subtitle="Admin-only edit. Saves to platform ledger, Firestore adminLedger, and syncs to Google Drive."
+      >
+        {editingLedgerRecord && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setConfirmSaveLedgerEdit(true);
+            }}
+            className="space-y-3"
+          >
+            <Input
+              label="Reference Code"
+              value={editLedgerDraft.referenceCode}
+              onChange={(e) => setEditLedgerDraft((d) => ({ ...d, referenceCode: e.target.value }))}
+            />
+            <Textarea
+              label="Event Summary"
+              rows={2}
+              required
+              value={editLedgerDraft.summary}
+              onChange={(e) => setEditLedgerDraft((d) => ({ ...d, summary: e.target.value }))}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Weight (kg)"
+                type="number"
+                step="0.1"
+                value={editLedgerDraft.weightKg}
+                onChange={(e) => setEditLedgerDraft((d) => ({ ...d, weightKg: e.target.value }))}
+              />
+              <Input
+                label="Amount (₹)"
+                type="number"
+                value={editLedgerDraft.amountInr}
+                onChange={(e) => setEditLedgerDraft((d) => ({ ...d, amountInr: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="City"
+                value={editLedgerDraft.city}
+                onChange={(e) => setEditLedgerDraft((d) => ({ ...d, city: e.target.value }))}
+              />
+              <Input
+                label="PIN Code"
+                maxLength={6}
+                value={editLedgerDraft.pinCode}
+                onChange={(e) => setEditLedgerDraft((d) => ({ ...d, pinCode: e.target.value.replace(/\D/g, '') }))}
+              />
+            </div>
+            <Button type="submit" className="w-full">
+              Review & Confirm Ledger Edit
+            </Button>
+          </form>
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        open={confirmSaveLedgerEdit && editingLedgerRecord !== null}
+        onClose={() => setConfirmSaveLedgerEdit(false)}
+        title="Confirm Ledger & Google Drive Update"
+        description={`Save Admin edits to captured event #${editingLedgerRecord?.sequenceNo} (${editingLedgerRecord?.eventType})? If Google Drive is connected, vault files will be updated immediately.`}
+        confirmLabel="Confirm & Save"
+        onConfirm={async () => {
+          if (!editingLedgerRecord) return;
+          await adminEditLedgerRecord(editingLedgerRecord.id, {
+            summary: editLedgerDraft.summary,
+            referenceCode: editLedgerDraft.referenceCode || undefined,
+            weightKg: editLedgerDraft.weightKg ? Number(editLedgerDraft.weightKg) : undefined,
+            amountInr: editLedgerDraft.amountInr ? Number(editLedgerDraft.amountInr) : undefined,
+            city: editLedgerDraft.city || 'Bengaluru',
+            pinCode: editLedgerDraft.pinCode || undefined,
+          });
+          setEditingLedgerRecord(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteLedger !== null}
+        onClose={() => setConfirmDeleteLedger(null)}
+        danger
+        title="Delete Captured Lifecycle Record"
+        description={`Permanently delete event #${confirmDeleteLedger?.sequenceNo} (${confirmDeleteLedger?.referenceCode || confirmDeleteLedger?.eventType}) from the Admin ledger, Firestore, and synced Google Drive vault files?`}
+        confirmLabel="Delete Permanently"
+        onConfirm={async () => {
+          if (confirmDeleteLedger) {
+            await adminDeleteLedgerRecord(confirmDeleteLedger.id);
+          }
+        }}
+      />
+
+      {/* View Live Google Drive File Content Modal */}
+      <Modal
+        open={viewDriveFileModal !== null}
+        onClose={() => setViewDriveFileModal(null)}
+        title={viewDriveFileModal ? `Google Drive File: ${viewDriveFileModal.file.name}` : ''}
+        maxWidth="max-w-3xl"
+      >
+        {viewDriveFileModal && (
+          <pre className="p-4 rounded-xl bg-[#174B37] text-[#A5D66D] font-mono text-xs overflow-auto max-h-[60vh]">
+            {viewDriveFileModal.content}
+          </pre>
+        )}
+      </Modal>
+
+      {/* Edit Live Google Drive File Modal -> Triggers Explicit Confirmation */}
+      <Modal
+        open={editDriveFileModal !== null}
+        onClose={() => setEditDriveFileModal(null)}
+        title={editDriveFileModal ? `Edit Google Drive File: ${editDriveFileModal.file.name}` : ''}
+        subtitle="Modifying this file updates it directly inside your Punarchakra Admin Audit Vault on Google Drive."
+        maxWidth="max-w-3xl"
+      >
+        {editDriveFileModal && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setConfirmSaveDriveFileEdit(true);
+            }}
+            className="space-y-3"
+          >
+            <Input
+              label="File Name"
+              required
+              value={editDriveFileModal.fileName}
+              onChange={(e) =>
+                setEditDriveFileModal((m) => (m ? { ...m, fileName: e.target.value } : null))
+              }
+            />
+            <Textarea
+              label="File Content (JSON / CSV)"
+              rows={12}
+              required
+              className="font-mono text-xs"
+              value={editDriveFileModal.content}
+              onChange={(e) =>
+                setEditDriveFileModal((m) => (m ? { ...m, content: e.target.value } : null))
+              }
+            />
+            <Button type="submit" className="w-full">
+              Review & Confirm Drive Update
+            </Button>
+          </form>
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        open={confirmSaveDriveFileEdit && editDriveFileModal !== null}
+        onClose={() => setConfirmSaveDriveFileEdit(false)}
+        title="Confirm Google Drive File Edit"
+        description={`Overwrite "${editDriveFileModal?.fileName}" in your Google Drive Punarchakra Admin Audit Vault?`}
+        confirmLabel="Overwrite Drive File"
+        onConfirm={async () => {
+          if (!editDriveFileModal) return;
+          const res = await adminEditDriveFile({
+            fileId: editDriveFileModal.file.id,
+            fileName: editDriveFileModal.fileName,
+            mimeType: editDriveFileModal.file.mimeType,
+            content: editDriveFileModal.content,
+          });
+          if (res.ok) setEditDriveFileModal(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteDriveFileModal !== null}
+        onClose={() => setConfirmDeleteDriveFileModal(null)}
+        danger
+        title="Delete File from Google Drive"
+        description={`Permanently delete "${confirmDeleteDriveFileModal?.name}" from Google Drive? This action cannot be undone from Punarchakra.`}
+        confirmLabel="Delete Drive File"
+        onConfirm={async () => {
+          if (confirmDeleteDriveFileModal) {
+            await adminDeleteDriveFile(confirmDeleteDriveFileModal.id);
+          }
+        }}
+      />
     </div>
   );
 };
